@@ -770,6 +770,17 @@ import {
   updateIssueTool,
   updateProjectTool,
 } from '@/tools/sentry'
+import {
+  snowflakeDescribeTableTool,
+  snowflakeExecuteQueryTool,
+  snowflakeListDatabasesTool,
+  snowflakeListSchemasTool,
+  snowflakeListTablesTool,
+  snowflakeListViewsTool,
+  snowflakeListWarehousesTool,
+  snowflakeListFileFormatsTool,
+  snowflakeListStagesTool,
+} from '@/tools/snowflake'
 import { searchTool as serperSearch } from '@/tools/serper'
 import {
   sharepointAddListItemTool,
@@ -1915,4 +1926,13 @@ export const tools: Record<string, ToolConfig> = {
   sentry_releases_list: listReleasesTool,
   sentry_releases_create: createReleaseTool,
   sentry_releases_deploy: createDeployTool,
+  snowflake_execute_query: snowflakeExecuteQueryTool,
+  snowflake_list_databases: snowflakeListDatabasesTool,
+  snowflake_list_schemas: snowflakeListSchemasTool,
+  snowflake_list_tables: snowflakeListTablesTool,
+  snowflake_list_views: snowflakeListViewsTool,
+  snowflake_list_warehouses: snowflakeListWarehousesTool,
+  snowflake_list_file_formats: snowflakeListFileFormatsTool,
+  snowflake_list_stages: snowflakeListStagesTool,
+  snowflake_describe_table: snowflakeDescribeTableTool,
 }
