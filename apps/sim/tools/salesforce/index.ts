@@ -11,6 +11,14 @@ export {
   salesforceUpdateContactTool,
 } from './contacts'
 export { salesforceCreateAccountTool } from './create_account'
+export {
+  salesforceCloneDashboardTool,
+  salesforceDeleteDashboardTool,
+  salesforceGetDashboardComponentTool,
+  salesforceGetDashboardTool,
+  salesforceListDashboardsTool,
+  salesforceRefreshDashboardTool,
+} from './dashboards'
 export { salesforceDeleteAccountTool } from './delete_account'
 export { salesforceGetAccountsTool } from './get_accounts'
 export {
@@ -25,6 +33,19 @@ export {
   salesforceGetOpportunitiesTool,
   salesforceUpdateOpportunityTool,
 } from './opportunities'
+export {
+  salesforceCreateReportTool,
+  salesforceDeleteReportInstanceTool,
+  salesforceDeleteReportTool,
+  salesforceGetReportInstanceTool,
+  salesforceGetReportMetadataTool,
+  salesforceListReportInstancesTool,
+  salesforceListReportsTool,
+  salesforceRunReportAsyncTool,
+  salesforceRunReportTool,
+  salesforceRunReportWithFiltersTool,
+  salesforceUpdateReportTool,
+} from './reports'
 export {
   salesforceCreateTaskTool,
   salesforceDeleteTaskTool,

@@ -9,7 +9,7 @@ export const SalesforceBlock: BlockConfig<SalesforceResponse> = {
   description: 'Interact with Salesforce CRM',
   authMode: AuthMode.OAuth,
   longDescription:
-    'Integrate Salesforce into your workflow. Manage accounts, contacts, leads, opportunities, cases, and tasks with powerful automation capabilities.',
+    'Integrate Salesforce into your workflow. Manage accounts, contacts, leads, opportunities, cases, tasks, reports, and dashboards with powerful automation capabilities.',
   docsLink: 'https://docs.sim.ai/tools/salesforce',
   category: 'tools',
   bgColor: '#E0E0E0',
@@ -44,6 +44,23 @@ export const SalesforceBlock: BlockConfig<SalesforceResponse> = {
         { label: 'Create Task', id: 'create_task' },
         { label: 'Update Task', id: 'update_task' },
         { label: 'Delete Task', id: 'delete_task' },
+        { label: 'List Reports', id: 'list_reports' },
+        { label: 'Get Report Metadata', id: 'get_report_metadata' },
+        { label: 'Run Report', id: 'run_report' },
+        { label: 'Run Report Async', id: 'run_report_async' },
+        { label: 'Get Report Instance', id: 'get_report_instance' },
+        { label: 'List Report Instances', id: 'list_report_instances' },
+        { label: 'Delete Report Instance', id: 'delete_report_instance' },
+        { label: 'Run Report with Filters', id: 'run_report_with_filters' },
+        { label: 'Create Report', id: 'create_report' },
+        { label: 'Update Report', id: 'update_report' },
+        { label: 'Delete Report', id: 'delete_report' },
+        { label: 'List Dashboards', id: 'list_dashboards' },
+        { label: 'Get Dashboard', id: 'get_dashboard' },
+        { label: 'Refresh Dashboard', id: 'refresh_dashboard' },
+        { label: 'Clone Dashboard', id: 'clone_dashboard' },
+        { label: 'Delete Dashboard', id: 'delete_dashboard' },
+        { label: 'Get Dashboard Component', id: 'get_dashboard_component' },
       ],
       value: () => 'get_accounts',
     },
@@ -133,7 +150,13 @@ export const SalesforceBlock: BlockConfig<SalesforceResponse> = {
       placeholder: 'Name',
       condition: {
         field: 'operation',
-        value: ['create_account', 'update_account', 'create_opportunity', 'update_opportunity'],
+        value: [
+          'create_account',
+          'update_account',
+          'create_opportunity',
+          'update_opportunity',
+          'clone_dashboard',
+        ],
       },
     },
     {
@@ -368,6 +391,88 @@ export const SalesforceBlock: BlockConfig<SalesforceResponse> = {
       placeholder: 'Account or Opportunity ID',
       condition: { field: 'operation', value: ['create_task'] },
     },
+    // Report fields
+    {
+      id: 'reportId',
+      title: 'Report ID',
+      type: 'short-input',
+      placeholder: 'Salesforce Report ID (e.g., 00Og5000000rk0nEAA)',
+      required: true,
+      condition: {
+        field: 'operation',
+        value: [
+          'get_report_metadata',
+          'run_report',
+          'run_report_async',
+          'get_report_instance',
+          'list_report_instances',
+          'delete_report_instance',
+          'run_report_with_filters',
+          'update_report',
+          'delete_report',
+        ],
+      },
+    },
+    {
+      id: 'instanceId',
+      title: 'Report Instance ID',
+      type: 'short-input',
+      placeholder: 'Instance ID from async report execution',
+      required: true,
+      condition: {
+        field: 'operation',
+        value: ['get_report_instance', 'delete_report_instance'],
+      },
+    },
+    {
+      id: 'includeDetails',
+      title: 'Include Details',
+      type: 'short-input',
+      placeholder: 'true or false (default: true)',
+      condition: {
+        field: 'operation',
+        value: ['run_report', 'run_report_async'],
+      },
+    },
+    // Dashboard fields
+    {
+      id: 'dashboardId',
+      title: 'Dashboard ID',
+      type: 'short-input',
+      placeholder: 'Salesforce Dashboard ID',
+      required: true,
+      condition: {
+        field: 'operation',
+        value: [
+          'get_dashboard',
+          'refresh_dashboard',
+          'clone_dashboard',
+          'delete_dashboard',
+          'get_dashboard_component',
+        ],
+      },
+    },
+    {
+      id: 'componentId',
+      title: 'Component ID',
+      type: 'short-input',
+      placeholder: 'Dashboard Component ID',
+      required: true,
+      condition: {
+        field: 'operation',
+        value: ['get_dashboard_component'],
+      },
+    },
+    {
+      id: 'folderId',
+      title: 'Folder ID',
+      type: 'short-input',
+      placeholder: 'Destination Folder ID',
+      condition: {
+        field: 'operation',
+        value: ['clone_dashboard'],
+      },
+    },
     // Long-input fields at the bottom
     {
       id: 'description',
@@ -390,6 +495,17 @@ export const SalesforceBlock: BlockConfig<SalesforceResponse> = {
           'create_task',
           'update_task',
         ],
+      },
+    },
+    {
+      id: 'reportMetadata',
+      title: 'Report Metadata (JSON)',
+      type: 'long-input',
+      placeholder: 'JSON string containing report metadata with filters',
+      required: true,
+      condition: {
+        field: 'operation',
+        value: ['run_report_with_filters', 'create_report', 'update_report'],
       },
     },
   ],
@@ -419,6 +535,23 @@ export const SalesforceBlock: BlockConfig<SalesforceResponse> = {
       'salesforce_create_task',
       'salesforce_update_task',
       'salesforce_delete_task',
+      'salesforce_list_reports',
+      'salesforce_get_report_metadata',
+      'salesforce_run_report',
+      'salesforce_run_report_async',
+      'salesforce_get_report_instance',
+      'salesforce_list_report_instances',
+      'salesforce_delete_report_instance',
+      'salesforce_run_report_with_filters',
+      'salesforce_create_report',
+      'salesforce_update_report',
+      'salesforce_delete_report',
+      'salesforce_list_dashboards',
+      'salesforce_get_dashboard',
+      'salesforce_refresh_dashboard',
+      'salesforce_clone_dashboard',
+      'salesforce_delete_dashboard',
+      'salesforce_get_dashboard_component',
     ],
     config: {
       tool: (params) => {
@@ -471,6 +604,40 @@ export const SalesforceBlock: BlockConfig<SalesforceResponse> = {
             return 'salesforce_update_task'
           case 'delete_task':
             return 'salesforce_delete_task'
+          case 'list_reports':
+            return 'salesforce_list_reports'
+          case 'get_report_metadata':
+            return 'salesforce_get_report_metadata'
+          case 'run_report':
+            return 'salesforce_run_report'
+          case 'run_report_async':
+            return 'salesforce_run_report_async'
+          case 'get_report_instance':
+            return 'salesforce_get_report_instance'
+          case 'list_report_instances':
+            return 'salesforce_list_report_instances'
+          case 'delete_report_instance':
+            return 'salesforce_delete_report_instance'
+          case 'run_report_with_filters':
+            return 'salesforce_run_report_with_filters'
+          case 'create_report':
+            return 'salesforce_create_report'
+          case 'update_report':
+            return 'salesforce_update_report'
+          case 'delete_report':
+            return 'salesforce_delete_report'
+          case 'list_dashboards':
+            return 'salesforce_list_dashboards'
+          case 'get_dashboard':
+            return 'salesforce_get_dashboard'
+          case 'refresh_dashboard':
+            return 'salesforce_refresh_dashboard'
+          case 'clone_dashboard':
+            return 'salesforce_clone_dashboard'
+          case 'delete_dashboard':
+            return 'salesforce_delete_dashboard'
+          case 'get_dashboard_component':
+            return 'salesforce_get_dashboard_component'
           default:
             throw new Error(`Unknown operation: ${params.operation}`)
         }
