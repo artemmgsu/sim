@@ -770,20 +770,6 @@ import {
   updateIssueTool,
   updateProjectTool,
 } from '@/tools/sentry'
-import {
-  snowflakeDescribeTableTool,
-  snowflakeExecuteQueryTool,
-  snowflakeInsertRowsTool,
-  snowflakeUpdateRowsTool,
-  snowflakeDeleteRowsTool,
-  snowflakeListDatabasesTool,
-  snowflakeListSchemasTool,
-  snowflakeListTablesTool,
-  snowflakeListViewsTool,
-  snowflakeListWarehousesTool,
-  snowflakeListFileFormatsTool,
-  snowflakeListStagesTool,
-} from '@/tools/snowflake'
 import { searchTool as serperSearch } from '@/tools/serper'
 import {
   sharepointAddListItemTool,
@@ -805,6 +791,20 @@ import {
   slackUpdateMessageTool,
 } from '@/tools/slack'
 import { smsSendTool } from '@/tools/sms'
+import {
+  snowflakeDeleteRowsTool,
+  snowflakeDescribeTableTool,
+  snowflakeExecuteQueryTool,
+  snowflakeInsertRowsTool,
+  snowflakeListDatabasesTool,
+  snowflakeListFileFormatsTool,
+  snowflakeListSchemasTool,
+  snowflakeListStagesTool,
+  snowflakeListTablesTool,
+  snowflakeListViewsTool,
+  snowflakeListWarehousesTool,
+  snowflakeUpdateRowsTool,
+} from '@/tools/snowflake'
 import { stagehandAgentTool, stagehandExtractTool } from '@/tools/stagehand'
 import {
   stripeCancelPaymentIntentTool,

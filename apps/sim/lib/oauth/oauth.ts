@@ -28,7 +28,6 @@ import {
   SalesforceIcon,
   SlackIcon,
   SnowflakeIcon,
-  SupabaseIcon,
   TrelloIcon,
   WealthboxIcon,
   WebflowIcon,
