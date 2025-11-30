@@ -1,7 +1,8 @@
-import { shallow } from 'zustand/shallow'
+import { useShallow } from 'zustand/react/shallow'
 import { BlockPathCalculator } from '@/lib/block-path-calculator'
 import { createLogger } from '@/lib/logs/console/logger'
 import { getBlockOutputs } from '@/lib/workflows/block-outputs'
+import { TriggerUtils } from '@/lib/workflows/triggers'
 import { useWorkflowRegistry } from '@/stores/workflows/registry/store'
 import { useSubBlockStore } from '@/stores/workflows/subblock/store'
 import { useWorkflowStore } from '@/stores/workflows/workflow/store'
@@ -87,11 +88,10 @@ function extractFieldsFromSchema(schema: any): Field[] {
 
 export function useBlockConnections(blockId: string) {
   const { edges, blocks } = useWorkflowStore(
-    (state) => ({
+    useShallow((state) => ({
       edges: state.edges,
       blocks: state.blocks,
-    }),
-    shallow
+    }))
   )
 
   const workflowId = useWorkflowRegistry((state) => state.activeWorkflowId)
@@ -110,8 +110,29 @@ export function useBlockConnections(blockId: string) {
     return merged
   }
 
-  // Find all blocks along paths leading to this block
-  const allPathNodeIds = BlockPathCalculator.findAllPathNodes(edges, blockId)
+  // Filter out all incoming edges to trigger blocks - triggers are independent entry points
+  // This ensures UI tags only show blocks that are actually connected in execution
+  const filteredEdges = edges.filter((edge) => {
+    const sourceBlock = blocks[edge.source]
+    const targetBlock = blocks[edge.target]
+
+    // If either block not found, keep the edge (might be in a different state structure)
+    if (!sourceBlock || !targetBlock) {
+      return true
+    }
+
+    const targetIsTrigger = TriggerUtils.isTriggerBlock({
+      type: targetBlock.type,
+      triggerMode: targetBlock.triggerMode,
+    })
+
+    // Filter out ALL incoming edges to trigger blocks
+    // Triggers are independent entry points and should not have incoming connections
+    return !targetIsTrigger
+  })
+
+  // Find all blocks along paths leading to this block (using filtered edges)
+  const allPathNodeIds = BlockPathCalculator.findAllPathNodes(filteredEdges, blockId)
 
   // Map each path node to a ConnectedBlock structure
   const allPathConnections = allPathNodeIds
@@ -161,8 +182,8 @@ export function useBlockConnections(blockId: string) {
     })
     .filter(Boolean) as ConnectedBlock[]
 
-  // Keep the original incoming connections for compatibility
-  const directIncomingConnections = edges
+  // Keep the original incoming connections for compatibility (using filtered edges)
+  const directIncomingConnections = filteredEdges
     .filter((edge) => edge.target === blockId)
     .map((edge) => {
       const sourceBlock = blocks[edge.source]

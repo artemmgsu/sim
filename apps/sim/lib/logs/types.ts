@@ -52,7 +52,7 @@ export interface ExecutionEnvironment {
 }
 
 export interface ExecutionTrigger {
-  type: 'api' | 'webhook' | 'schedule' | 'manual' | 'chat'
+  type: 'api' | 'webhook' | 'schedule' | 'manual' | 'chat' | string
   source: string
   data?: Record<string, unknown>
   timestamp: string
@@ -93,10 +93,6 @@ export interface WorkflowExecutionLog {
     type: string
     url: string
     key: string
-    uploadedAt: string
-    expiresAt: string
-    storageProvider?: 's3' | 'blob' | 'local'
-    bucketName?: string
   }>
   // Execution details
   executionData: {
@@ -176,6 +172,9 @@ export interface TraceSpan {
     total?: number
   }
   providerTiming?: ProviderTiming
+  loopId?: string
+  parallelId?: string
+  iterationIndex?: number
 }
 
 export interface WorkflowExecutionSummary {

@@ -2,7 +2,7 @@ import { type NextRequest, NextResponse } from 'next/server'
 import { createLogger } from '@/lib/logs/console/logger'
 import { generateRequestId } from '@/lib/utils'
 import {
-  checkRateLimits,
+  checkWebhookPreprocessing,
   findWebhookAndWorkflow,
   handleProviderChallenges,
   parseWebhookBody,
@@ -56,14 +56,50 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
   const { webhook: foundWebhook, workflow: foundWorkflow } = result
 
-  const authError = await verifyProviderAuth(foundWebhook, request, rawBody, requestId)
+  const authError = await verifyProviderAuth(
+    foundWebhook,
+    foundWorkflow,
+    request,
+    rawBody,
+    requestId
+  )
   if (authError) {
     return authError
   }
 
-  const rateLimitError = await checkRateLimits(foundWorkflow, foundWebhook, requestId)
-  if (rateLimitError) {
-    return rateLimitError
+  let preprocessError: NextResponse | null = null
+  try {
+    preprocessError = await checkWebhookPreprocessing(
+      foundWorkflow,
+      foundWebhook,
+      requestId,
+      true // testMode - skips usage limits
+    )
+    if (preprocessError) {
+      return preprocessError
+    }
+  } catch (error) {
+    logger.error(`[${requestId}] Unexpected error during webhook preprocessing`, {
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+      webhookId: foundWebhook.id,
+      workflowId: foundWorkflow.id,
+    })
+
+    if (foundWebhook.provider === 'microsoft-teams') {
+      return NextResponse.json(
+        {
+          type: 'message',
+          text: 'An unexpected error occurred during preprocessing',
+        },
+        { status: 500 }
+      )
+    }
+
+    return NextResponse.json(
+      { error: 'An unexpected error occurred during preprocessing' },
+      { status: 500 }
+    )
   }
 
   logger.info(

@@ -27,6 +27,7 @@ import { authorizeSubscriptionReference } from '@/lib/billing/authorization'
 import { handleNewUser } from '@/lib/billing/core/usage'
 import { syncSubscriptionUsageLimits } from '@/lib/billing/organization'
 import { getPlans } from '@/lib/billing/plans'
+import { syncSeatsFromStripeQuantity } from '@/lib/billing/validation/seat-management'
 import { handleManualEnterpriseSubscription } from '@/lib/billing/webhooks/enterprise'
 import {
   handleInvoiceFinalized,
@@ -43,8 +44,8 @@ import { quickValidateEmail } from '@/lib/email/validation'
 import { env, isTruthy } from '@/lib/env'
 import { isBillingEnabled, isEmailVerificationEnabled } from '@/lib/environment'
 import { createLogger } from '@/lib/logs/console/logger'
+import { SSO_TRUSTED_PROVIDERS } from '@/lib/sso/consts'
 import { getBaseUrl } from '@/lib/urls/utils'
-import { SSO_TRUSTED_PROVIDERS } from './sso/consts'
 
 const logger = createLogger('Auth')
 
@@ -146,13 +147,16 @@ export const auth = betterAuth({
         'github',
         'email-password',
         'confluence',
-        'supabase',
+        // 'supabase',
         'x',
         'notion',
         'microsoft',
         'slack',
         'reddit',
         'webflow',
+        'asana',
+        'pipedrive',
+        'hubspot',
 
         // Common SSO provider patterns
         ...SSO_TRUSTED_PROVIDERS,
@@ -426,8 +430,8 @@ export const auth = betterAuth({
           scopes: [
             'https://www.googleapis.com/auth/userinfo.email',
             'https://www.googleapis.com/auth/userinfo.profile',
-            'https://www.googleapis.com/auth/drive.readonly',
             'https://www.googleapis.com/auth/drive.file',
+            'https://www.googleapis.com/auth/drive',
           ],
           prompt: 'consent',
           redirectURI: `${getBaseUrl()}/api/auth/oauth2/callback/google-drive`,
@@ -441,8 +445,8 @@ export const auth = betterAuth({
           scopes: [
             'https://www.googleapis.com/auth/userinfo.email',
             'https://www.googleapis.com/auth/userinfo.profile',
-            'https://www.googleapis.com/auth/drive.readonly',
             'https://www.googleapis.com/auth/drive.file',
+            'https://www.googleapis.com/auth/drive',
           ],
           prompt: 'consent',
           redirectURI: `${getBaseUrl()}/api/auth/oauth2/callback/google-docs`,
@@ -456,8 +460,8 @@ export const auth = betterAuth({
           scopes: [
             'https://www.googleapis.com/auth/userinfo.email',
             'https://www.googleapis.com/auth/userinfo.profile',
-            'https://www.googleapis.com/auth/drive.readonly',
             'https://www.googleapis.com/auth/drive.file',
+            'https://www.googleapis.com/auth/drive',
           ],
           prompt: 'consent',
           redirectURI: `${getBaseUrl()}/api/auth/oauth2/callback/google-sheets`,
@@ -509,13 +513,19 @@ export const auth = betterAuth({
             'Chat.Read',
             'Chat.ReadWrite',
             'Chat.ReadBasic',
+            'ChatMessage.Send',
             'Channel.ReadBasic.All',
             'ChannelMessage.Send',
             'ChannelMessage.Read.All',
+            'ChannelMessage.ReadWrite',
+            'ChannelMember.Read.All',
             'Group.Read.All',
             'Group.ReadWrite.All',
             'Team.ReadBasic.All',
+            'TeamMember.Read.All',
             'offline_access',
+            'Files.Read',
+            'Sites.Read.All',
           ],
           responseType: 'code',
           accessType: 'offline',
@@ -655,55 +665,257 @@ export const auth = betterAuth({
           },
         },
 
-        // Supabase provider
         {
-          providerId: 'supabase',
-          clientId: env.SUPABASE_CLIENT_ID as string,
-          clientSecret: env.SUPABASE_CLIENT_SECRET as string,
-          authorizationUrl: 'https://api.supabase.com/v1/oauth/authorize',
-          tokenUrl: 'https://api.supabase.com/v1/oauth/token',
-          userInfoUrl: 'https://dummy-not-used.supabase.co',
-          scopes: ['database.read', 'database.write', 'projects.read'],
+          providerId: 'pipedrive',
+          clientId: env.PIPEDRIVE_CLIENT_ID as string,
+          clientSecret: env.PIPEDRIVE_CLIENT_SECRET as string,
+          authorizationUrl: 'https://oauth.pipedrive.com/oauth/authorize',
+          tokenUrl: 'https://oauth.pipedrive.com/oauth/token',
+          userInfoUrl: 'https://api.pipedrive.com/v1/users/me',
+          prompt: 'consent',
+          scopes: [
+            'base',
+            'deals:full',
+            'contacts:full',
+            'leads:full',
+            'activities:full',
+            'mail:full',
+            'projects:full',
+          ],
           responseType: 'code',
-          pkce: true,
-          redirectURI: `${getBaseUrl()}/api/auth/oauth2/callback/supabase`,
+          redirectURI: `${getBaseUrl()}/api/auth/oauth2/callback/pipedrive`,
           getUserInfo: async (tokens) => {
             try {
-              logger.info('Creating Supabase user profile from token data')
+              logger.info('Fetching Pipedrive user profile')
 
-              let userId = 'supabase-user'
-              if (tokens.idToken) {
-                try {
-                  const decodedToken = JSON.parse(
-                    Buffer.from(tokens.idToken.split('.')[1], 'base64').toString()
-                  )
-                  if (decodedToken.sub) {
-                    userId = decodedToken.sub
-                  }
-                } catch (e) {
-                  logger.warn('Failed to decode Supabase ID token', {
-                    error: e,
-                  })
-                }
+              const response = await fetch('https://api.pipedrive.com/v1/users/me', {
+                headers: {
+                  Authorization: `Bearer ${tokens.accessToken}`,
+                },
+              })
+
+              if (!response.ok) {
+                logger.error('Failed to fetch Pipedrive user info', {
+                  status: response.status,
+                })
+                throw new Error('Failed to fetch user info')
               }
 
-              const uniqueId = `${userId}-${Date.now()}`
-              const now = new Date()
+              const data = await response.json()
+              const user = data.data
 
               return {
-                id: uniqueId,
-                name: 'Supabase User',
-                email: `${uniqueId.replace(/[^a-zA-Z0-9]/g, '')}@supabase.user`,
-                emailVerified: false,
-                createdAt: now,
-                updatedAt: now,
+                id: user.id.toString(),
+                name: user.name,
+                email: user.email,
+                emailVerified: user.activated,
+                image: user.icon_url,
+                createdAt: new Date(),
+                updatedAt: new Date(),
               }
             } catch (error) {
-              logger.error('Error creating Supabase user profile:', { error })
+              logger.error('Error creating Pipedrive user profile:', { error })
               return null
             }
           },
         },
+
+        // HubSpot provider
+        {
+          providerId: 'hubspot',
+          clientId: env.HUBSPOT_CLIENT_ID as string,
+          clientSecret: env.HUBSPOT_CLIENT_SECRET as string,
+          authorizationUrl: 'https://app.hubspot.com/oauth/authorize',
+          tokenUrl: 'https://api.hubapi.com/oauth/v1/token',
+          userInfoUrl: 'https://api.hubapi.com/oauth/v1/access-tokens',
+          prompt: 'consent',
+          scopes: [
+            'crm.objects.contacts.read',
+            'crm.objects.contacts.write',
+            'crm.objects.companies.read',
+            'crm.objects.companies.write',
+            'crm.objects.deals.read',
+            'crm.objects.deals.write',
+            'crm.objects.owners.read',
+            'crm.objects.users.read',
+            'crm.objects.users.write',
+            'crm.objects.marketing_events.read',
+            'crm.objects.marketing_events.write',
+            'crm.objects.line_items.read',
+            'crm.objects.line_items.write',
+            'crm.objects.quotes.read',
+            'crm.objects.quotes.write',
+            'crm.objects.appointments.read',
+            'crm.objects.appointments.write',
+            'crm.objects.carts.read',
+            'crm.objects.carts.write',
+            'crm.import',
+            'crm.lists.read',
+            'crm.lists.write',
+            'tickets',
+          ],
+          redirectURI: `${getBaseUrl()}/api/auth/oauth2/callback/hubspot`,
+          getUserInfo: async (tokens) => {
+            try {
+              logger.info('Fetching HubSpot user profile')
+
+              const response = await fetch(
+                `https://api.hubapi.com/oauth/v1/access-tokens/${tokens.accessToken}`
+              )
+
+              if (!response.ok) {
+                let errorBody: string | undefined
+                try {
+                  errorBody = await response.text()
+                } catch {
+                  // ignore
+                }
+                logger.error('Failed to fetch HubSpot user info', {
+                  status: response.status,
+                  statusText: response.statusText,
+                  body: errorBody?.slice(0, 500),
+                })
+                throw new Error('Failed to fetch user info')
+              }
+
+              const rawText = await response.text()
+              const data = JSON.parse(rawText)
+
+              const scopesArray = Array.isArray((data as any)?.scopes) ? (data as any).scopes : []
+              if (Array.isArray(scopesArray) && scopesArray.length > 0) {
+                tokens.scopes = scopesArray
+              } else if (typeof (data as any)?.scope === 'string') {
+                tokens.scopes = (data as any).scope.split(/\s+/).filter(Boolean)
+              }
+
+              logger.info('HubSpot token metadata response:', {
+                hasScopes: !!data.scopes,
+                scopesType: typeof data.scopes,
+                scopesIsArray: Array.isArray(data.scopes),
+                scopesValue: data.scopes,
+                fullResponse: data,
+              })
+
+              return {
+                id: data.user_id || data.hub_id.toString(),
+                name: data.user || 'HubSpot User',
+                email: data.user || `hubspot-${data.hub_id}@hubspot.com`,
+                emailVerified: true,
+                image: undefined,
+                createdAt: new Date(),
+                updatedAt: new Date(),
+                // Extract scopes from HubSpot's response and convert array to space-delimited string
+                // Use 'scope' (singular) as that's what better-auth expects for the account table
+                ...(data.scopes && Array.isArray(data.scopes)
+                  ? { scope: data.scopes.join(' ') }
+                  : {}),
+              }
+            } catch (error) {
+              logger.error('Error creating HubSpot user profile:', { error })
+              return null
+            }
+          },
+        },
+
+        // Salesforce provider
+        {
+          providerId: 'salesforce',
+          clientId: env.SALESFORCE_CLIENT_ID as string,
+          clientSecret: env.SALESFORCE_CLIENT_SECRET as string,
+          authorizationUrl: 'https://login.salesforce.com/services/oauth2/authorize',
+          tokenUrl: 'https://login.salesforce.com/services/oauth2/token',
+          userInfoUrl: 'https://login.salesforce.com/services/oauth2/userinfo',
+          scopes: ['api', 'refresh_token', 'openid'],
+          pkce: true,
+          prompt: 'consent',
+          redirectURI: `${getBaseUrl()}/api/auth/oauth2/callback/salesforce`,
+          getUserInfo: async (tokens) => {
+            try {
+              logger.info('Fetching Salesforce user profile')
+
+              const response = await fetch(
+                'https://login.salesforce.com/services/oauth2/userinfo',
+                {
+                  headers: {
+                    Authorization: `Bearer ${tokens.accessToken}`,
+                  },
+                }
+              )
+
+              if (!response.ok) {
+                logger.error('Failed to fetch Salesforce user info', {
+                  status: response.status,
+                })
+                throw new Error('Failed to fetch user info')
+              }
+
+              const data = await response.json()
+
+              return {
+                id: data.user_id || data.sub,
+                name: data.name || 'Salesforce User',
+                email: data.email || `salesforce-${data.user_id}@salesforce.com`,
+                emailVerified: data.email_verified || true,
+                image: data.picture || undefined,
+                createdAt: new Date(),
+                updatedAt: new Date(),
+              }
+            } catch (error) {
+              logger.error('Error creating Salesforce user profile:', { error })
+              return null
+            }
+          },
+        },
+
+        // Supabase provider (unused)
+        // {
+        //   providerId: 'supabase',
+        //   clientId: env.SUPABASE_CLIENT_ID as string,
+        //   clientSecret: env.SUPABASE_CLIENT_SECRET as string,
+        //   authorizationUrl: 'https://api.supabase.com/v1/oauth/authorize',
+        //   tokenUrl: 'https://api.supabase.com/v1/oauth/token',
+        //   userInfoUrl: 'https://dummy-not-used.supabase.co',
+        //   scopes: ['database.read', 'database.write', 'projects.read'],
+        //   responseType: 'code',
+        //   pkce: true,
+        //   redirectURI: `${getBaseUrl()}/api/auth/oauth2/callback/supabase`,
+        //   getUserInfo: async (tokens) => {
+        //     try {
+        //       logger.info('Creating Supabase user profile from token data')
+
+        //       let userId = 'supabase-user'
+        //       if (tokens.idToken) {
+        //         try {
+        //           const decodedToken = JSON.parse(
+        //             Buffer.from(tokens.idToken.split('.')[1], 'base64').toString()
+        //           )
+        //           if (decodedToken.sub) {
+        //             userId = decodedToken.sub
+        //           }
+        //         } catch (e) {
+        //           logger.warn('Failed to decode Supabase ID token', {
+        //             error: e,
+        //           })
+        //         }
+        //       }
+
+        //       const uniqueId = `${userId}-${Date.now()}`
+        //       const now = new Date()
+
+        //       return {
+        //         id: uniqueId,
+        //         name: 'Supabase User',
+        //         email: `${uniqueId.replace(/[^a-zA-Z0-9]/g, '')}@supabase.user`,
+        //         emailVerified: false,
+        //         createdAt: now,
+        //         updatedAt: now,
+        //       }
+        //     } catch (error) {
+        //       logger.error('Error creating Supabase user profile:', { error })
+        //       return null
+        //     }
+        //   },
+        // },
 
         // X provider
         {
@@ -772,7 +984,30 @@ export const auth = betterAuth({
           authorizationUrl: 'https://auth.atlassian.com/authorize',
           tokenUrl: 'https://auth.atlassian.com/oauth/token',
           userInfoUrl: 'https://api.atlassian.com/me',
-          scopes: ['read:page:confluence', 'write:page:confluence', 'read:me', 'offline_access'],
+          scopes: [
+            'read:confluence-content.all',
+            'read:confluence-space.summary',
+            'read:space:confluence',
+            'read:space-details:confluence',
+            'write:confluence-content',
+            'write:confluence-space',
+            'write:confluence-file',
+            'read:page:confluence',
+            'write:page:confluence',
+            'read:comment:confluence',
+            'read:content:confluence',
+            'write:comment:confluence',
+            'delete:comment:confluence',
+            'read:attachment:confluence',
+            'write:attachment:confluence',
+            'delete:attachment:confluence',
+            'delete:page:confluence',
+            'read:label:confluence',
+            'write:label:confluence',
+            'search:confluence',
+            'read:me',
+            'offline_access',
+          ],
           responseType: 'code',
           pkce: true,
           accessType: 'offline',
@@ -815,56 +1050,56 @@ export const auth = betterAuth({
           },
         },
 
-        // Discord provider
-        {
-          providerId: 'discord',
-          clientId: env.DISCORD_CLIENT_ID as string,
-          clientSecret: env.DISCORD_CLIENT_SECRET as string,
-          authorizationUrl: 'https://discord.com/api/oauth2/authorize',
-          tokenUrl: 'https://discord.com/api/oauth2/token',
-          userInfoUrl: 'https://discord.com/api/users/@me',
-          scopes: ['identify', 'bot', 'messages.read', 'guilds', 'guilds.members.read'],
-          responseType: 'code',
-          accessType: 'offline',
-          authentication: 'basic',
-          prompt: 'consent',
-          redirectURI: `${getBaseUrl()}/api/auth/oauth2/callback/discord`,
-          getUserInfo: async (tokens) => {
-            try {
-              const response = await fetch('https://discord.com/api/users/@me', {
-                headers: {
-                  Authorization: `Bearer ${tokens.accessToken}`,
-                },
-              })
+        // Discord provider (unused)
+        // {
+        //   providerId: 'discord',
+        //   clientId: env.DISCORD_CLIENT_ID as string,
+        //   clientSecret: env.DISCORD_CLIENT_SECRET as string,
+        //   authorizationUrl: 'https://discord.com/api/oauth2/authorize',
+        //   tokenUrl: 'https://discord.com/api/oauth2/token',
+        //   userInfoUrl: 'https://discord.com/api/users/@me',
+        //   scopes: ['identify', 'bot', 'messages.read', 'guilds', 'guilds.members.read'],
+        //   responseType: 'code',
+        //   accessType: 'offline',
+        //   authentication: 'basic',
+        //   prompt: 'consent',
+        //   redirectURI: `${getBaseUrl()}/api/auth/oauth2/callback/discord`,
+        //   getUserInfo: async (tokens) => {
+        //     try {
+        //       const response = await fetch('https://discord.com/api/users/@me', {
+        //         headers: {
+        //           Authorization: `Bearer ${tokens.accessToken}`,
+        //         },
+        //       })
 
-              if (!response.ok) {
-                logger.error('Error fetching Discord user info:', {
-                  status: response.status,
-                  statusText: response.statusText,
-                })
-                return null
-              }
+        //       if (!response.ok) {
+        //         logger.error('Error fetching Discord user info:', {
+        //           status: response.status,
+        //           statusText: response.statusText,
+        //         })
+        //         return null
+        //       }
 
-              const profile = await response.json()
-              const now = new Date()
+        //       const profile = await response.json()
+        //       const now = new Date()
 
-              return {
-                id: profile.id,
-                name: profile.username || 'Discord User',
-                email: profile.email || `${profile.id}@discord.user`,
-                image: profile.avatar
-                  ? `https://cdn.discordapp.com/avatars/${profile.id}/${profile.avatar}.png`
-                  : undefined,
-                emailVerified: profile.verified || false,
-                createdAt: now,
-                updatedAt: now,
-              }
-            } catch (error) {
-              logger.error('Error in Discord getUserInfo:', { error })
-              return null
-            }
-          },
-        },
+        //       return {
+        //         id: profile.id,
+        //         name: profile.username || 'Discord User',
+        //         email: profile.email || `${profile.id}@discord.user`,
+        //         image: profile.avatar
+        //           ? `https://cdn.discordapp.com/avatars/${profile.id}/${profile.avatar}.png`
+        //           : undefined,
+        //         emailVerified: profile.verified || false,
+        //         createdAt: now,
+        //         updatedAt: now,
+        //       }
+        //     } catch (error) {
+        //       logger.error('Error in Discord getUserInfo:', { error })
+        //       return null
+        //     }
+        //   },
+        // },
 
         // Jira provider
         {
@@ -893,6 +1128,18 @@ export const auth = betterAuth({
             'read:user:jira',
             'read:field-configuration:jira',
             'read:issue-details:jira',
+            'read:issue-event:jira',
+            'delete:issue:jira',
+            'write:comment:jira',
+            'read:comment:jira',
+            'delete:comment:jira',
+            'read:attachment:jira',
+            'delete:attachment:jira',
+            'write:issue-worklog:jira',
+            'read:issue-worklog:jira',
+            'delete:issue-worklog:jira',
+            'write:issue-link:jira',
+            'delete:issue-link:jira',
           ],
           responseType: 'code',
           pkce: true,
@@ -1043,7 +1290,24 @@ export const auth = betterAuth({
           authorizationUrl: 'https://www.reddit.com/api/v1/authorize?duration=permanent',
           tokenUrl: 'https://www.reddit.com/api/v1/access_token',
           userInfoUrl: 'https://oauth.reddit.com/api/v1/me',
-          scopes: ['identity', 'read'],
+          scopes: [
+            'identity',
+            'read',
+            'submit',
+            'vote',
+            'save',
+            'edit',
+            'subscribe',
+            'history',
+            'privatemessages',
+            'account',
+            'mysubreddits',
+            'flair',
+            'report',
+            'modposts',
+            'modflair',
+            'modmail',
+          ],
           responseType: 'code',
           pkce: false,
           accessType: 'offline',
@@ -1158,6 +1422,57 @@ export const auth = betterAuth({
           },
         },
 
+        {
+          providerId: 'asana',
+          clientId: env.ASANA_CLIENT_ID as string,
+          clientSecret: env.ASANA_CLIENT_SECRET as string,
+          authorizationUrl: 'https://app.asana.com/-/oauth_authorize',
+          tokenUrl: 'https://app.asana.com/-/oauth_token',
+          userInfoUrl: 'https://app.asana.com/api/1.0/users/me',
+          scopes: ['default'],
+          responseType: 'code',
+          pkce: false,
+          accessType: 'offline',
+          authentication: 'basic',
+          prompt: 'consent',
+          redirectURI: `${getBaseUrl()}/api/auth/oauth2/callback/asana`,
+          getUserInfo: async (tokens) => {
+            try {
+              const response = await fetch('https://app.asana.com/api/1.0/users/me', {
+                headers: {
+                  Authorization: `Bearer ${tokens.accessToken}`,
+                },
+              })
+
+              if (!response.ok) {
+                logger.error('Error fetching Asana user info:', {
+                  status: response.status,
+                  statusText: response.statusText,
+                })
+                return null
+              }
+
+              const result = await response.json()
+              const profile = result.data
+
+              const now = new Date()
+
+              return {
+                id: profile.gid,
+                name: profile.name || 'Asana User',
+                email: profile.email || `${profile.gid}@asana.user`,
+                image: profile.photo?.image_128x128 || undefined,
+                emailVerified: !!profile.email,
+                createdAt: now,
+                updatedAt: now,
+              }
+            } catch (error) {
+              logger.error('Error in Asana getUserInfo:', { error })
+              return null
+            }
+          },
+        },
+
         // Slack provider
         {
           providerId: 'slack',
@@ -1176,7 +1491,9 @@ export const auth = betterAuth({
             'chat:write.public',
             'users:read',
             'files:write',
+            'files:read',
             'canvases:write',
+            'reactions:write',
           ],
           responseType: 'code',
           accessType: 'offline',
@@ -1338,6 +1655,7 @@ export const auth = betterAuth({
                 await sendPlanWelcomeEmail(subscription)
               },
               onSubscriptionUpdate: async ({
+                event,
                 subscription,
               }: {
                 event: Stripe.Event
@@ -1357,6 +1675,35 @@ export const auth = betterAuth({
                     referenceId: subscription.referenceId,
                     error,
                   })
+                }
+
+                // Sync seat count from Stripe subscription quantity for team plans
+                if (subscription.plan === 'team') {
+                  try {
+                    const stripeSubscription = event.data.object as Stripe.Subscription
+                    const quantity = stripeSubscription.items?.data?.[0]?.quantity || 1
+
+                    const result = await syncSeatsFromStripeQuantity(
+                      subscription.id,
+                      subscription.seats,
+                      quantity
+                    )
+
+                    if (result.synced) {
+                      logger.info('[onSubscriptionUpdate] Synced seat count from Stripe', {
+                        subscriptionId: subscription.id,
+                        referenceId: subscription.referenceId,
+                        previousSeats: result.previousSeats,
+                        newSeats: result.newSeats,
+                      })
+                    }
+                  } catch (error) {
+                    logger.error('[onSubscriptionUpdate] Failed to sync seat count', {
+                      subscriptionId: subscription.id,
+                      referenceId: subscription.referenceId,
+                      error,
+                    })
+                  }
                 }
               },
               onSubscriptionDeleted: async ({

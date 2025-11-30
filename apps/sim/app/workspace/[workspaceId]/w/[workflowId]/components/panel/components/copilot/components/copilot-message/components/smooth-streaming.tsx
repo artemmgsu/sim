@@ -1,32 +1,46 @@
 import { memo, useEffect, useRef, useState } from 'react'
-import CopilotMarkdownRenderer from './markdown-renderer'
+import CopilotMarkdownRenderer from '@/app/workspace/[workspaceId]/w/[workflowId]/components/panel/components/copilot/components/copilot-message/components/markdown-renderer'
 
+/**
+ * Character animation delay in milliseconds
+ */
+const CHARACTER_DELAY = 3
+
+/**
+ * StreamingIndicator shows animated dots during message streaming
+ * Uses CSS classes for animations to follow best practices
+ *
+ * @returns Animated loading indicator
+ */
 export const StreamingIndicator = memo(() => (
   <div className='flex items-center py-1 text-muted-foreground transition-opacity duration-200 ease-in-out'>
     <div className='flex space-x-0.5'>
-      <div
-        className='h-1 w-1 animate-bounce rounded-full bg-muted-foreground'
-        style={{ animationDelay: '0ms', animationDuration: '1.2s' }}
-      />
-      <div
-        className='h-1 w-1 animate-bounce rounded-full bg-muted-foreground'
-        style={{ animationDelay: '0.15s', animationDuration: '1.2s' }}
-      />
-      <div
-        className='h-1 w-1 animate-bounce rounded-full bg-muted-foreground'
-        style={{ animationDelay: '0.3s', animationDuration: '1.2s' }}
-      />
+      <div className='h-1 w-1 animate-bounce rounded-full bg-muted-foreground [animation-delay:0ms] [animation-duration:1.2s]' />
+      <div className='h-1 w-1 animate-bounce rounded-full bg-muted-foreground [animation-delay:150ms] [animation-duration:1.2s]' />
+      <div className='h-1 w-1 animate-bounce rounded-full bg-muted-foreground [animation-delay:300ms] [animation-duration:1.2s]' />
     </div>
   </div>
 ))
 
 StreamingIndicator.displayName = 'StreamingIndicator'
 
+/**
+ * Props for the SmoothStreamingText component
+ */
 interface SmoothStreamingTextProps {
+  /** Content to display with streaming animation */
   content: string
+  /** Whether the content is actively streaming */
   isStreaming: boolean
 }
 
+/**
+ * SmoothStreamingText component displays text with character-by-character animation
+ * Creates a smooth streaming effect for AI responses
+ *
+ * @param props - Component props
+ * @returns Streaming text with smooth animation
+ */
 export const SmoothStreamingText = memo(
   ({ content, isStreaming }: SmoothStreamingTextProps) => {
     const [displayedContent, setDisplayedContent] = useState('')
@@ -36,8 +50,11 @@ export const SmoothStreamingText = memo(
     const streamingStartTimeRef = useRef<number | null>(null)
     const isAnimatingRef = useRef(false)
 
+    /**
+     * Handles content streaming animation
+     * Updates displayed content character by character during streaming
+     */
     useEffect(() => {
-      // Update content reference
       contentRef.current = content
 
       if (content.length === 0) {
@@ -48,56 +65,44 @@ export const SmoothStreamingText = memo(
       }
 
       if (isStreaming) {
-        // Start timing when streaming begins
         if (streamingStartTimeRef.current === null) {
           streamingStartTimeRef.current = Date.now()
         }
 
-        // Continue animation if there's more content to show
         if (indexRef.current < content.length) {
           const animateText = () => {
             const currentContent = contentRef.current
             const currentIndex = indexRef.current
 
             if (currentIndex < currentContent.length) {
-              // Add characters one by one for true character-by-character streaming
               const chunkSize = 1
               const newDisplayed = currentContent.slice(0, currentIndex + chunkSize)
 
               setDisplayedContent(newDisplayed)
               indexRef.current = currentIndex + chunkSize
 
-              // Consistent fast speed for all characters
-              const delay = 3 // Consistent fast delay in ms for all characters
-
-              timeoutRef.current = setTimeout(animateText, delay)
+              timeoutRef.current = setTimeout(animateText, CHARACTER_DELAY)
             } else {
-              // Animation complete
               isAnimatingRef.current = false
             }
           }
 
-          // Only start new animation if not already animating
           if (!isAnimatingRef.current) {
-            // Clear any existing animation
             if (timeoutRef.current) {
               clearTimeout(timeoutRef.current)
             }
 
             isAnimatingRef.current = true
-            // Continue animation from current position
             animateText()
           }
         }
       } else {
-        // Not streaming, show all content immediately and reset timing
         setDisplayedContent(content)
         indexRef.current = content.length
         isAnimatingRef.current = false
         streamingStartTimeRef.current = null
       }
 
-      // Cleanup on unmount
       return () => {
         if (timeoutRef.current) {
           clearTimeout(timeoutRef.current)
@@ -107,7 +112,7 @@ export const SmoothStreamingText = memo(
     }, [content, isStreaming])
 
     return (
-      <div className='relative max-w-full overflow-hidden' style={{ minHeight: '1.25rem' }}>
+      <div className='relative min-h-[1.25rem] max-w-full overflow-hidden'>
         <CopilotMarkdownRenderer content={displayedContent} />
       </div>
     )
@@ -122,38 +127,3 @@ export const SmoothStreamingText = memo(
 )
 
 SmoothStreamingText.displayName = 'SmoothStreamingText'
-
-// Maximum character length for a word before it's broken up
-const MAX_WORD_LENGTH = 25
-
-export const WordWrap = ({ text }: { text: string }) => {
-  if (!text) return null
-
-  // Split text into words, keeping spaces and punctuation
-  const parts = text.split(/(\s+)/g)
-
-  return (
-    <>
-      {parts.map((part, index) => {
-        // If the part is whitespace or shorter than the max length, render it as is
-        if (part.match(/\s+/) || part.length <= MAX_WORD_LENGTH) {
-          return <span key={index}>{part}</span>
-        }
-
-        // For long words, break them up into chunks
-        const chunks = []
-        for (let i = 0; i < part.length; i += MAX_WORD_LENGTH) {
-          chunks.push(part.substring(i, i + MAX_WORD_LENGTH))
-        }
-
-        return (
-          <span key={index} className='break-all'>
-            {chunks.map((chunk, chunkIndex) => (
-              <span key={chunkIndex}>{chunk}</span>
-            ))}
-          </span>
-        )
-      })}
-    </>
-  )
-}

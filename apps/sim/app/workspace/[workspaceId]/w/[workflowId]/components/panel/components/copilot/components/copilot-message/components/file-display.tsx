@@ -1,22 +1,52 @@
 import { memo, useState } from 'react'
 import { FileText, Image } from 'lucide-react'
-import type { MessageFileAttachment } from '@/app/workspace/[workspaceId]/w/[workflowId]/components/panel/components/copilot/components/user-input/user-input'
+import type { MessageFileAttachment } from '@/app/workspace/[workspaceId]/w/[workflowId]/components/panel/components/copilot/components/user-input/hooks/use-file-attachments'
 
+/**
+ * File size units for formatting
+ */
+const FILE_SIZE_UNITS = ['B', 'KB', 'MB', 'GB'] as const
+
+/**
+ * Kilobyte multiplier
+ */
+const KILOBYTE = 1024
+
+/**
+ * Props for the FileAttachmentDisplay component
+ */
 interface FileAttachmentDisplayProps {
+  /** Array of file attachments to display */
   fileAttachments: MessageFileAttachment[]
 }
 
+/**
+ * FileAttachmentDisplay shows thumbnails or icons for attached files
+ * Displays image previews or appropriate icons based on file type
+ *
+ * @param props - Component props
+ * @returns Grid of file attachment thumbnails
+ */
 export const FileAttachmentDisplay = memo(({ fileAttachments }: FileAttachmentDisplayProps) => {
   const [fileUrls, setFileUrls] = useState<Record<string, string>>({})
+  const [failedImages, setFailedImages] = useState<Set<string>>(new Set())
 
+  /**
+   * Formats file size in bytes to human-readable format
+   * @param bytes - File size in bytes
+   * @returns Formatted string (e.g., "2.5 MB")
+   */
   const formatFileSize = (bytes: number) => {
     if (bytes === 0) return '0 B'
-    const k = 1024
-    const sizes = ['B', 'KB', 'MB', 'GB']
-    const i = Math.floor(Math.log(bytes) / Math.log(k))
-    return `${Math.round((bytes / k ** i) * 10) / 10} ${sizes[i]}`
+    const i = Math.floor(Math.log(bytes) / Math.log(KILOBYTE))
+    return `${Math.round((bytes / KILOBYTE ** i) * 10) / 10} ${FILE_SIZE_UNITS[i]}`
   }
 
+  /**
+   * Returns appropriate icon based on file media type
+   * @param mediaType - MIME type of the file
+   * @returns Icon component
+   */
   const getFileIcon = (mediaType: string) => {
     if (mediaType.startsWith('image/')) {
       return <Image className='h-5 w-5 text-muted-foreground' />
@@ -30,24 +60,46 @@ export const FileAttachmentDisplay = memo(({ fileAttachments }: FileAttachmentDi
     return <FileText className='h-5 w-5 text-muted-foreground' />
   }
 
+  /**
+   * Gets or generates the file URL from cache
+   * @param file - File attachment object
+   * @returns URL to serve the file
+   */
   const getFileUrl = (file: MessageFileAttachment) => {
     const cacheKey = file.key
     if (fileUrls[cacheKey]) {
       return fileUrls[cacheKey]
     }
 
-    const url = `/api/files/serve/${encodeURIComponent(file.key)}?bucket=copilot`
+    const url = `/api/files/serve/${encodeURIComponent(file.key)}?context=copilot`
     setFileUrls((prev) => ({ ...prev, [cacheKey]: url }))
     return url
   }
 
+  /**
+   * Handles click on a file attachment - opens in new tab
+   * @param file - File attachment object
+   */
   const handleFileClick = (file: MessageFileAttachment) => {
     const serveUrl = getFileUrl(file)
     window.open(serveUrl, '_blank')
   }
 
+  /**
+   * Checks if a file is an image based on media type
+   * @param mediaType - MIME type of the file
+   * @returns True if file is an image
+   */
   const isImageFile = (mediaType: string) => {
     return mediaType.startsWith('image/')
+  }
+
+  /**
+   * Handles image loading errors
+   * @param fileId - ID of the file that failed to load
+   */
+  const handleImageError = (fileId: string) => {
+    setFailedImages((prev) => new Set(prev).add(fileId))
   }
 
   return (
@@ -59,29 +111,14 @@ export const FileAttachmentDisplay = memo(({ fileAttachments }: FileAttachmentDi
           onClick={() => handleFileClick(file)}
           title={`${file.filename} (${formatFileSize(file.size)})`}
         >
-          {isImageFile(file.media_type) ? (
-            // For images, show actual thumbnail
+          {isImageFile(file.media_type) && !failedImages.has(file.id) ? (
             <img
               src={getFileUrl(file)}
               alt={file.filename}
               className='h-full w-full object-cover'
-              onError={(e) => {
-                // If image fails to load, replace with icon
-                const target = e.target as HTMLImageElement
-                target.style.display = 'none'
-                const parent = target.parentElement
-                if (parent) {
-                  const iconContainer = document.createElement('div')
-                  iconContainer.className =
-                    'flex items-center justify-center w-full h-full bg-background/50'
-                  iconContainer.innerHTML =
-                    '<svg class="h-5 w-5 text-muted-foreground" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>'
-                  parent.appendChild(iconContainer)
-                }
-              }}
+              onError={() => handleImageError(file.id)}
             />
           ) : (
-            // For other files, show icon centered
             <div className='flex h-full w-full items-center justify-center bg-background/50'>
               {getFileIcon(file.media_type)}
             </div>

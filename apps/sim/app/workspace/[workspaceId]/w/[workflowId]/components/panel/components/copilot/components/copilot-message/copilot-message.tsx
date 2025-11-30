@@ -1,26 +1,9 @@
 'use client'
 
-import { type FC, memo, useEffect, useMemo, useRef, useState } from 'react'
-import {
-  Blocks,
-  BookOpen,
-  Bot,
-  Box,
-  Check,
-  Clipboard,
-  CornerDownLeft,
-  Info,
-  LibraryBig,
-  RotateCcw,
-  Shapes,
-  SquareChevronRight,
-  ThumbsDown,
-  ThumbsUp,
-  Workflow,
-  X,
-} from 'lucide-react'
-import { InlineToolCall } from '@/lib/copilot/inline-tool-call'
-import { createLogger } from '@/lib/logs/console/logger'
+import { type FC, memo, useMemo, useState } from 'react'
+import { Check, Copy, RotateCcw, ThumbsDown, ThumbsUp } from 'lucide-react'
+import { Button } from '@/components/emcn'
+import { InlineToolCall } from '@/app/workspace/[workspaceId]/w/[workflowId]/components/panel/components/copilot/components'
 import {
   FileAttachmentDisplay,
   SmoothStreamingText,
@@ -29,25 +12,43 @@ import {
 } from '@/app/workspace/[workspaceId]/w/[workflowId]/components/panel/components/copilot/components/copilot-message/components'
 import CopilotMarkdownRenderer from '@/app/workspace/[workspaceId]/w/[workflowId]/components/panel/components/copilot/components/copilot-message/components/markdown-renderer'
 import {
-  UserInput,
-  type UserInputRef,
-} from '@/app/workspace/[workspaceId]/w/[workflowId]/components/panel/components/copilot/components/user-input/user-input'
-import { usePreviewStore } from '@/stores/copilot/preview-store'
-import { useCopilotStore } from '@/stores/copilot/store'
-import type { CopilotMessage as CopilotMessageType } from '@/stores/copilot/types'
+  useCheckpointManagement,
+  useMessageEditing,
+  useMessageFeedback,
+  useSuccessTimers,
+} from '@/app/workspace/[workspaceId]/w/[workflowId]/components/panel/components/copilot/components/copilot-message/hooks'
+import { UserInput } from '@/app/workspace/[workspaceId]/w/[workflowId]/components/panel/components/copilot/components/user-input/user-input'
+import { useCopilotStore } from '@/stores/panel/copilot/store'
+import type { CopilotMessage as CopilotMessageType } from '@/stores/panel/copilot/types'
 
-const logger = createLogger('CopilotMessage')
-
+/**
+ * Props for the CopilotMessage component
+ */
 interface CopilotMessageProps {
+  /** Message object containing content and metadata */
   message: CopilotMessageType
+  /** Whether the message is currently streaming */
   isStreaming?: boolean
+  /** Width of the panel in pixels */
   panelWidth?: number
+  /** Whether the message should appear dimmed */
   isDimmed?: boolean
+  /** Number of checkpoints for this message */
   checkpointCount?: number
-  onEditModeChange?: (isEditing: boolean) => void
+  /** Callback when edit mode changes */
+  onEditModeChange?: (isEditing: boolean, cancelCallback?: () => void) => void
+  /** Callback when revert mode changes */
   onRevertModeChange?: (isReverting: boolean) => void
 }
 
+/**
+ * CopilotMessage component displays individual chat messages
+ * Handles both user and assistant messages with different rendering and interactions
+ * Supports editing, checkpoints, feedback, and file attachments
+ *
+ * @param props - Component props
+ * @returns Message component with appropriate role-based rendering
+ */
 const CopilotMessage: FC<CopilotMessageProps> = memo(
   ({
     message,
@@ -60,50 +61,20 @@ const CopilotMessage: FC<CopilotMessageProps> = memo(
   }) => {
     const isUser = message.role === 'user'
     const isAssistant = message.role === 'assistant'
-    const [showCopySuccess, setShowCopySuccess] = useState(false)
-    const [showUpvoteSuccess, setShowUpvoteSuccess] = useState(false)
-    const [showDownvoteSuccess, setShowDownvoteSuccess] = useState(false)
-    const [showRestoreConfirmation, setShowRestoreConfirmation] = useState(false)
-    const [showAllContexts, setShowAllContexts] = useState(false)
-    const [isEditMode, setIsEditMode] = useState(false)
-    const [isExpanded, setIsExpanded] = useState(false)
-    const [editedContent, setEditedContent] = useState(message.content)
-    const [isHoveringMessage, setIsHoveringMessage] = useState(false)
-    const editContainerRef = useRef<HTMLDivElement>(null)
-    const messageContentRef = useRef<HTMLDivElement>(null)
-    const userInputRef = useRef<UserInputRef>(null)
-    const [needsExpansion, setNeedsExpansion] = useState(false)
-    const [showCheckpointDiscardModal, setShowCheckpointDiscardModal] = useState(false)
-    const pendingEditRef = useRef<{
-      message: string
-      fileAttachments?: any[]
-      contexts?: any[]
-    } | null>(null)
 
-    // Get checkpoint functionality from copilot store
+    // Store state
     const {
       messageCheckpoints: allMessageCheckpoints,
-      revertToCheckpoint,
-      isRevertingCheckpoint,
-      currentChat,
       messages,
-      workflowId,
-      sendMessage,
       isSendingMessage,
       abortMessage,
       mode,
       setMode,
+      isAborting,
     } = useCopilotStore()
-
-    // Get preview store for accessing workflow YAML after rejection
-    const { getPreviewByToolCall, getLatestPendingPreview } = usePreviewStore()
-
-    // Import COPILOT_TOOL_IDS - placing it here since it's needed in multiple functions
-    const WORKFLOW_TOOL_NAMES = ['edit_workflow']
 
     // Get checkpoints for this message if it's a user message
     const messageCheckpoints = isUser ? allMessageCheckpoints[message.id] || [] : []
-    // Only consider it as having checkpoints if there's at least one valid checkpoint with an id
     const hasCheckpoints = messageCheckpoints.length > 0 && messageCheckpoints.some((cp) => cp?.id)
 
     // Check if this is the last user message (for showing abort button)
@@ -113,532 +84,79 @@ const CopilotMessage: FC<CopilotMessageProps> = memo(
       return userMessages.length > 0 && userMessages[userMessages.length - 1]?.id === message.id
     }, [isUser, messages, message.id])
 
+    // UI state
+    const [isHoveringMessage, setIsHoveringMessage] = useState(false)
+
+    // Success timers hook
+    const {
+      showCopySuccess,
+      showUpvoteSuccess,
+      showDownvoteSuccess,
+      handleCopy,
+      setShowUpvoteSuccess,
+      setShowDownvoteSuccess,
+    } = useSuccessTimers()
+
+    // Message feedback hook
+    const { handleUpvote, handleDownvote } = useMessageFeedback(message, messages, {
+      setShowUpvoteSuccess,
+      setShowDownvoteSuccess,
+    })
+
+    // Checkpoint management hook
+    const {
+      showRestoreConfirmation,
+      showCheckpointDiscardModal,
+      pendingEditRef,
+      setShowCheckpointDiscardModal,
+      handleRevertToCheckpoint,
+      handleConfirmRevert,
+      handleCancelRevert,
+      handleCancelCheckpointDiscard,
+      handleContinueWithoutRevert,
+      handleContinueAndRevert,
+    } = useCheckpointManagement(
+      message,
+      messages,
+      messageCheckpoints,
+      onRevertModeChange,
+      onEditModeChange
+    )
+
+    // Message editing hook
+    const {
+      isEditMode,
+      isExpanded,
+      editedContent,
+      needsExpansion,
+      editContainerRef,
+      messageContentRef,
+      userInputRef,
+      setEditedContent,
+      handleCancelEdit,
+      handleMessageClick,
+      handleSubmitEdit,
+    } = useMessageEditing({
+      message,
+      messages,
+      isLastUserMessage,
+      hasCheckpoints,
+      onEditModeChange: (isEditing) => {
+        onEditModeChange?.(isEditing, handleCancelEdit)
+      },
+      disableDocumentClickOutside: true,
+      showCheckpointDiscardModal,
+      setShowCheckpointDiscardModal,
+      pendingEditRef,
+    })
+
+    /**
+     * Handles copying message content to clipboard
+     * Uses the success timer hook to show feedback
+     */
     const handleCopyContent = () => {
-      // Copy clean text content
-      navigator.clipboard.writeText(message.content)
-      setShowCopySuccess(true)
+      handleCopy(message.content)
     }
-
-    // Helper function to get the full assistant response content
-    const getFullAssistantContent = (message: CopilotMessageType) => {
-      // First try the direct content
-      if (message.content?.trim()) {
-        return message.content
-      }
-
-      // If no direct content, build from content blocks
-      if (message.contentBlocks && message.contentBlocks.length > 0) {
-        return message.contentBlocks
-          .filter((block) => block.type === 'text')
-          .map((block) => block.content)
-          .join('')
-      }
-
-      return message.content || ''
-    }
-
-    // Helper function to find the last user query before this assistant message
-    const getLastUserQuery = () => {
-      const messageIndex = messages.findIndex((msg) => msg.id === message.id)
-      if (messageIndex === -1) return null
-
-      // Look backwards from this message to find the last user message
-      for (let i = messageIndex - 1; i >= 0; i--) {
-        if (messages[i].role === 'user') {
-          return messages[i].content
-        }
-      }
-      return null
-    }
-
-    // Helper function to extract workflow YAML from workflow tool calls
-    const getWorkflowYaml = () => {
-      // Step 1: Check both toolCalls array and contentBlocks for workflow tools
-      const allToolCalls = [
-        ...(message.toolCalls || []),
-        ...(message.contentBlocks || [])
-          .filter((block) => block.type === 'tool_call')
-          .map((block) => (block as any).toolCall),
-      ]
-
-      // Find workflow tools (edit_workflow)
-      const workflowTools = allToolCalls.filter((toolCall) =>
-        WORKFLOW_TOOL_NAMES.includes(toolCall?.name)
-      )
-
-      // Extract YAML content from workflow tools in the current message
-      for (const toolCall of workflowTools) {
-        // Try various locations where YAML content might be stored
-        const yamlContent =
-          toolCall.result?.yamlContent ||
-          toolCall.result?.data?.yamlContent ||
-          toolCall.input?.yamlContent ||
-          toolCall.input?.data?.yamlContent
-
-        if (yamlContent && typeof yamlContent === 'string' && yamlContent.trim()) {
-          return yamlContent
-        }
-      }
-
-      // Step 2: Check copilot store's preview YAML (set when workflow tools execute)
-      if (currentChat?.previewYaml?.trim()) {
-        return currentChat.previewYaml
-      }
-
-      // Step 3: Check preview store for recent workflow tool calls from this message
-      for (const toolCall of workflowTools) {
-        if (toolCall.id) {
-          const preview = getPreviewByToolCall(toolCall.id)
-          if (preview?.yamlContent?.trim()) {
-            return preview.yamlContent
-          }
-        }
-      }
-
-      // Step 4: If this message contains workflow tools but no YAML found yet,
-      // try to get the latest pending preview for this workflow (fallback)
-      if (workflowTools.length > 0 && workflowId) {
-        const latestPreview = getLatestPendingPreview(workflowId, currentChat?.id)
-        if (latestPreview?.yamlContent?.trim()) {
-          return latestPreview.yamlContent
-        }
-      }
-
-      return null
-    }
-
-    // Function to submit feedback
-    const submitFeedback = async (isPositive: boolean) => {
-      // Ensure we have a chat ID
-      if (!currentChat?.id) {
-        logger.error('No current chat ID available for feedback submission')
-        return
-      }
-
-      const userQuery = getLastUserQuery()
-      if (!userQuery) {
-        logger.error('No user query found for feedback submission')
-        return
-      }
-
-      const agentResponse = getFullAssistantContent(message)
-      if (!agentResponse.trim()) {
-        logger.error('No agent response content available for feedback submission')
-        return
-      }
-
-      // Get workflow YAML if this message contains workflow tools
-      const workflowYaml = getWorkflowYaml()
-
-      try {
-        const requestBody: any = {
-          chatId: currentChat.id,
-          userQuery,
-          agentResponse,
-          isPositiveFeedback: isPositive,
-        }
-
-        // Only include workflowYaml if it exists
-        if (workflowYaml) {
-          requestBody.workflowYaml = workflowYaml
-        }
-
-        const response = await fetch('/api/copilot/feedback', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(requestBody),
-        })
-
-        if (!response.ok) {
-          throw new Error(`Failed to submit feedback: ${response.statusText}`)
-        }
-
-        const result = await response.json()
-      } catch (error) {
-        logger.error('Error submitting feedback:', error)
-      }
-    }
-
-    const handleUpvote = async () => {
-      // Reset downvote if it was active
-      setShowDownvoteSuccess(false)
-      setShowUpvoteSuccess(true)
-
-      // Submit positive feedback
-      await submitFeedback(true)
-    }
-
-    const handleDownvote = async () => {
-      // Reset upvote if it was active
-      setShowUpvoteSuccess(false)
-      setShowDownvoteSuccess(true)
-
-      // Submit negative feedback
-      await submitFeedback(false)
-    }
-
-    const handleRevertToCheckpoint = () => {
-      setShowRestoreConfirmation(true)
-      onRevertModeChange?.(true)
-    }
-
-    const handleConfirmRevert = async () => {
-      if (messageCheckpoints.length > 0) {
-        // Use the most recent checkpoint for this message
-        const latestCheckpoint = messageCheckpoints[0]
-        try {
-          await revertToCheckpoint(latestCheckpoint.id)
-
-          // Remove the used checkpoint from the store
-          const { messageCheckpoints: currentCheckpoints } = useCopilotStore.getState()
-          const updatedCheckpoints = {
-            ...currentCheckpoints,
-            [message.id]: messageCheckpoints.slice(1), // Remove the first (used) checkpoint
-          }
-          useCopilotStore.setState({ messageCheckpoints: updatedCheckpoints })
-
-          // Truncate all messages after this point
-          const currentMessages = messages
-          const revertIndex = currentMessages.findIndex((m) => m.id === message.id)
-          if (revertIndex !== -1) {
-            const truncatedMessages = currentMessages.slice(0, revertIndex + 1)
-            useCopilotStore.setState({ messages: truncatedMessages })
-
-            // Update DB to remove messages after this point
-            if (currentChat?.id) {
-              try {
-                await fetch('/api/copilot/chat/update-messages', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    chatId: currentChat.id,
-                    messages: truncatedMessages.map((m) => ({
-                      id: m.id,
-                      role: m.role,
-                      content: m.content,
-                      timestamp: m.timestamp,
-                      ...(m.contentBlocks && { contentBlocks: m.contentBlocks }),
-                      ...(m.fileAttachments && { fileAttachments: m.fileAttachments }),
-                      ...((m as any).contexts && { contexts: (m as any).contexts }),
-                    })),
-                  }),
-                })
-              } catch (error) {
-                logger.error('Failed to update messages in DB after revert:', error)
-              }
-            }
-          }
-
-          setShowRestoreConfirmation(false)
-          onRevertModeChange?.(false)
-
-          // Enter edit mode after reverting
-          setIsEditMode(true)
-          onEditModeChange?.(true)
-
-          // Focus the input after render
-          setTimeout(() => {
-            userInputRef.current?.focus()
-          }, 100)
-
-          logger.info('Checkpoint reverted and removed from message', {
-            messageId: message.id,
-            checkpointId: latestCheckpoint.id,
-          })
-        } catch (error) {
-          logger.error('Failed to revert to checkpoint:', error)
-          setShowRestoreConfirmation(false)
-          onRevertModeChange?.(false)
-        }
-      }
-    }
-
-    const handleCancelRevert = () => {
-      setShowRestoreConfirmation(false)
-      onRevertModeChange?.(false)
-    }
-
-    const handleEditMessage = () => {
-      setIsEditMode(true)
-      setIsExpanded(false)
-      setEditedContent(message.content)
-      setShowRestoreConfirmation(false) // Dismiss any open confirmation popup
-      onRevertModeChange?.(false) // Notify parent
-      onEditModeChange?.(true)
-      // Focus the input and position cursor at the end after render
-      setTimeout(() => {
-        userInputRef.current?.focus()
-      }, 0)
-    }
-
-    const handleCancelEdit = () => {
-      setIsEditMode(false)
-      setEditedContent(message.content)
-      onEditModeChange?.(false)
-    }
-
-    const handleMessageClick = () => {
-      // Allow entering edit mode even while streaming
-
-      // If message needs expansion and is not expanded, expand it
-      if (needsExpansion && !isExpanded) {
-        setIsExpanded(true)
-      }
-
-      // Always enter edit mode on click
-      handleEditMessage()
-    }
-
-    const handleSubmitEdit = async (
-      editedMessage: string,
-      fileAttachments?: any[],
-      contexts?: any[]
-    ) => {
-      if (!editedMessage.trim()) return
-
-      // If a stream is in progress, abort it first
-      if (isSendingMessage) {
-        abortMessage()
-        // Wait a brief moment for abort to complete
-        await new Promise((resolve) => setTimeout(resolve, 100))
-      }
-
-      // Check if this message has checkpoints
-      if (hasCheckpoints) {
-        // Store the pending edit
-        pendingEditRef.current = { message: editedMessage, fileAttachments, contexts }
-        // Show confirmation modal
-        setShowCheckpointDiscardModal(true)
-        return
-      }
-
-      // Proceed with the edit
-      await performEdit(editedMessage, fileAttachments, contexts)
-    }
-
-    const performEdit = async (
-      editedMessage: string,
-      fileAttachments?: any[],
-      contexts?: any[]
-    ) => {
-      // Find the index of this message and truncate conversation
-      const currentMessages = messages
-      const editIndex = currentMessages.findIndex((m) => m.id === message.id)
-
-      if (editIndex !== -1) {
-        // Exit edit mode visually
-        setIsEditMode(false)
-        // Clear editing state in parent immediately to prevent dimming of new messages
-        onEditModeChange?.(false)
-
-        // Truncate messages after the edited message (but keep the edited message with updated content)
-        const truncatedMessages = currentMessages.slice(0, editIndex)
-
-        // Update the edited message with new content but keep it in the array
-        const updatedMessage = {
-          ...message,
-          content: editedMessage,
-          fileAttachments: fileAttachments || message.fileAttachments,
-          contexts: contexts || (message as any).contexts,
-        }
-
-        // Show the updated message immediately to prevent disappearing
-        useCopilotStore.setState({ messages: [...truncatedMessages, updatedMessage] })
-
-        // If we have a current chat, update the DB to remove messages after this point
-        if (currentChat?.id) {
-          try {
-            await fetch('/api/copilot/chat/update-messages', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                chatId: currentChat.id,
-                messages: truncatedMessages.map((m) => ({
-                  id: m.id,
-                  role: m.role,
-                  content: m.content,
-                  timestamp: m.timestamp,
-                  ...(m.contentBlocks && { contentBlocks: m.contentBlocks }),
-                  ...(m.fileAttachments && { fileAttachments: m.fileAttachments }),
-                  ...((m as any).contexts && { contexts: (m as any).contexts }),
-                })),
-              }),
-            })
-          } catch (error) {
-            logger.error('Failed to update messages in DB after edit:', error)
-          }
-        }
-
-        // Send the edited message with the SAME message ID
-        await sendMessage(editedMessage, {
-          fileAttachments: fileAttachments || message.fileAttachments,
-          contexts: contexts || (message as any).contexts,
-          messageId: message.id, // Reuse the original message ID
-        })
-      }
-    }
-
-    useEffect(() => {
-      if (showCopySuccess) {
-        const timer = setTimeout(() => {
-          setShowCopySuccess(false)
-        }, 2000)
-        return () => clearTimeout(timer)
-      }
-    }, [showCopySuccess])
-
-    useEffect(() => {
-      if (showUpvoteSuccess) {
-        const timer = setTimeout(() => {
-          setShowUpvoteSuccess(false)
-        }, 2000)
-        return () => clearTimeout(timer)
-      }
-    }, [showUpvoteSuccess])
-
-    useEffect(() => {
-      if (showDownvoteSuccess) {
-        const timer = setTimeout(() => {
-          setShowDownvoteSuccess(false)
-        }, 2000)
-        return () => clearTimeout(timer)
-      }
-    }, [showDownvoteSuccess])
-
-    // Handle Escape and Enter keys for restore confirmation
-    useEffect(() => {
-      if (!showRestoreConfirmation) return
-
-      const handleKeyDown = (event: KeyboardEvent) => {
-        if (event.key === 'Escape') {
-          setShowRestoreConfirmation(false)
-          onRevertModeChange?.(false)
-        } else if (event.key === 'Enter') {
-          event.preventDefault()
-          handleConfirmRevert()
-        }
-      }
-
-      document.addEventListener('keydown', handleKeyDown)
-      return () => document.removeEventListener('keydown', handleKeyDown)
-    }, [showRestoreConfirmation, onRevertModeChange, handleConfirmRevert])
-
-    // Handle Escape and Enter keys for checkpoint discard confirmation
-    useEffect(() => {
-      if (!showCheckpointDiscardModal) return
-
-      const handleKeyDown = async (event: KeyboardEvent) => {
-        if (event.key === 'Escape') {
-          setShowCheckpointDiscardModal(false)
-          pendingEditRef.current = null
-        } else if (event.key === 'Enter') {
-          event.preventDefault()
-          // Trigger "Continue and revert" action on Enter
-          if (messageCheckpoints.length > 0) {
-            const latestCheckpoint = messageCheckpoints[0]
-            try {
-              await revertToCheckpoint(latestCheckpoint.id)
-
-              // Remove the used checkpoint from the store
-              const { messageCheckpoints: currentCheckpoints } = useCopilotStore.getState()
-              const updatedCheckpoints = {
-                ...currentCheckpoints,
-                [message.id]: messageCheckpoints.slice(1),
-              }
-              useCopilotStore.setState({ messageCheckpoints: updatedCheckpoints })
-
-              logger.info('Reverted to checkpoint before editing message', {
-                messageId: message.id,
-                checkpointId: latestCheckpoint.id,
-              })
-            } catch (error) {
-              logger.error('Failed to revert to checkpoint:', error)
-            }
-          }
-
-          setShowCheckpointDiscardModal(false)
-
-          if (pendingEditRef.current) {
-            const { message: msg, fileAttachments, contexts } = pendingEditRef.current
-            await performEdit(msg, fileAttachments, contexts)
-            pendingEditRef.current = null
-          }
-        }
-      }
-
-      document.addEventListener('keydown', handleKeyDown)
-      return () => document.removeEventListener('keydown', handleKeyDown)
-    }, [showCheckpointDiscardModal, messageCheckpoints, message.id])
-
-    // Handle click outside to exit edit mode
-    useEffect(() => {
-      if (!isEditMode) return
-
-      const handleClickOutside = (event: MouseEvent) => {
-        const target = event.target as HTMLElement
-
-        // Don't close if clicking inside the edit container
-        if (editContainerRef.current?.contains(target)) {
-          return
-        }
-
-        // Check if clicking on another user message box
-        const clickedMessageBox = target.closest('[data-message-box]') as HTMLElement
-        if (clickedMessageBox) {
-          const clickedMessageId = clickedMessageBox.getAttribute('data-message-id')
-          // If clicking on a different message, close this one (the other will open via its own click handler)
-          if (clickedMessageId && clickedMessageId !== message.id) {
-            handleCancelEdit()
-          }
-          return
-        }
-
-        // Check if clicking on the main user input at the bottom
-        if (target.closest('textarea') || target.closest('input[type="text"]')) {
-          handleCancelEdit()
-          return
-        }
-
-        // Only close if NOT clicking on any component (i.e., clicking directly on panel background)
-        // If the target has children or is a component, don't close
-        if (target.children.length > 0 || target.tagName !== 'DIV') {
-          return
-        }
-
-        handleCancelEdit()
-      }
-
-      const handleKeyDown = (event: KeyboardEvent) => {
-        if (event.key === 'Escape') {
-          handleCancelEdit()
-        }
-      }
-
-      // Use click event instead of mousedown to allow the target's click handler to fire first
-      // Add listener with a slight delay to avoid immediate trigger when entering edit mode
-      const timeoutId = setTimeout(() => {
-        document.addEventListener('click', handleClickOutside, true) // Use capture phase
-        document.addEventListener('keydown', handleKeyDown)
-      }, 100)
-
-      return () => {
-        clearTimeout(timeoutId)
-        document.removeEventListener('click', handleClickOutside, true)
-        document.removeEventListener('keydown', handleKeyDown)
-      }
-    }, [isEditMode, message.id])
-
-    // Check if message content needs expansion (is tall)
-    useEffect(() => {
-      if (messageContentRef.current && isUser) {
-        const scrollHeight = messageContentRef.current.scrollHeight
-        const clientHeight = messageContentRef.current.clientHeight
-        // If content is taller than the max height (3 lines ~60px), mark as needing expansion
-        setNeedsExpansion(scrollHeight > 60)
-      }
-    }, [message.content, isUser])
 
     // Get clean text content with double newline parsing
     const cleanTextContent = useMemo(() => {
@@ -667,14 +185,9 @@ const CopilotMessage: FC<CopilotMessageProps> = memo(
           return (
             <div
               key={`text-${index}-${block.timestamp || index}`}
-              className='w-full max-w-full overflow-hidden transition-opacity duration-200 ease-in-out'
-              style={{
-                opacity: cleanBlockContent.length > 0 ? 1 : 0.7,
-                transform: shouldUseSmoothing ? 'translateY(0)' : undefined,
-                transition: shouldUseSmoothing
-                  ? 'transform 0.1s ease-out, opacity 0.2s ease-in-out'
-                  : 'opacity 0.2s ease-in-out',
-              }}
+              className={`w-full max-w-full overflow-hidden transition-opacity duration-200 ease-in-out ${
+                cleanBlockContent.length > 0 ? 'opacity-100' : 'opacity-70'
+              } ${shouldUseSmoothing ? 'translate-y-0 transition-transform duration-100 ease-out' : ''}`}
             >
               {shouldUseSmoothing ? (
                 <SmoothStreamingText content={cleanBlockContent} isStreaming={isStreaming} />
@@ -703,12 +216,10 @@ const CopilotMessage: FC<CopilotMessageProps> = memo(
           )
         }
         if (block.type === 'tool_call') {
-          // Visibility and filtering handled by InlineToolCall
           return (
             <div
               key={`tool-${block.toolCall.id}`}
-              className='transition-opacity duration-300 ease-in-out'
-              style={{ opacity: 1 }}
+              className='opacity-100 transition-opacity duration-300 ease-in-out'
             >
               <InlineToolCall toolCallId={block.toolCall.id} toolCall={block.toolCall} />
             </div>
@@ -721,15 +232,26 @@ const CopilotMessage: FC<CopilotMessageProps> = memo(
     if (isUser) {
       return (
         <div
-          className={`w-full max-w-full overflow-hidden py-0.5 transition-opacity duration-200 ${isDimmed ? 'opacity-40' : 'opacity-100'}`}
+          className={`w-full max-w-full overflow-hidden transition-opacity duration-200 [max-width:var(--panel-max-width)] ${isDimmed ? 'opacity-40' : 'opacity-100'}`}
+          style={{ '--panel-max-width': `${panelWidth - 16}px` } as React.CSSProperties}
         >
           {isEditMode ? (
-            <div ref={editContainerRef} className='relative w-full'>
+            <div
+              ref={editContainerRef}
+              data-edit-container
+              data-message-id={message.id}
+              className='relative w-full'
+            >
               <UserInput
                 ref={userInputRef}
                 onSubmit={handleSubmitEdit}
-                onAbort={handleCancelEdit}
+                onAbort={() => {
+                  if (isSendingMessage && isLastUserMessage) {
+                    abortMessage()
+                  }
+                }}
                 isLoading={isSendingMessage && isLastUserMessage}
+                isAborting={isAborting}
                 disabled={showCheckpointDiscardModal}
                 value={editedContent}
                 onChange={setEditedContent}
@@ -737,84 +259,38 @@ const CopilotMessage: FC<CopilotMessageProps> = memo(
                 mode={mode}
                 onModeChange={setMode}
                 panelWidth={panelWidth}
-                hideContextUsage={true}
                 clearOnSubmit={false}
               />
 
               {/* Inline Checkpoint Discard Confirmation - shown below input in edit mode */}
               {showCheckpointDiscardModal && (
-                <div className='mt-2 rounded-lg border border-gray-200 bg-gray-50 p-2.5 dark:border-gray-700 dark:bg-gray-900'>
-                  <p className='mb-2 text-foreground text-sm'>Continue from a previous message?</p>
-                  <div className='flex gap-1.5'>
-                    <button
-                      onClick={() => {
-                        setShowCheckpointDiscardModal(false)
-                        pendingEditRef.current = null
-                      }}
-                      className='flex flex-1 items-center justify-center gap-1.5 rounded-md border border-gray-300 bg-muted px-2 py-1 text-foreground text-xs transition-colors hover:bg-muted/80 dark:border-gray-600 dark:bg-background dark:hover:bg-muted'
+                <div className='mt-[8px] rounded-[4px] border border-[var(--surface-11)] bg-[var(--surface-6)] p-[10px] dark:border-[var(--surface-11)] dark:bg-[var(--surface-9)]'>
+                  <p className='mb-[8px] text-[var(--text-primary)] text-sm'>
+                    Continue from a previous message?
+                  </p>
+                  <div className='flex gap-[6px]'>
+                    <Button
+                      onClick={handleCancelCheckpointDiscard}
+                      variant='default'
+                      className='flex flex-1 items-center justify-center gap-[6px] px-[8px] py-[4px] text-xs'
                     >
                       <span>Cancel</span>
-                      <span className='text-[10px] text-muted-foreground'>(Esc)</span>
-                    </button>
-                    <button
-                      onClick={async (e) => {
-                        e.preventDefault()
-                        setShowCheckpointDiscardModal(false)
-
-                        // Proceed with edit WITHOUT reverting checkpoint
-                        if (pendingEditRef.current) {
-                          const { message, fileAttachments, contexts } = pendingEditRef.current
-                          await performEdit(message, fileAttachments, contexts)
-                          pendingEditRef.current = null
-                        }
-                      }}
-                      className='flex-1 rounded-md border border-border bg-background px-2 py-1 text-xs transition-colors hover:bg-muted dark:bg-muted dark:hover:bg-muted/80'
+                      <span className='text-[10px] text-[var(--text-muted)]'>(Esc)</span>
+                    </Button>
+                    <Button
+                      onClick={handleContinueAndRevert}
+                      variant='outline'
+                      className='flex-1 px-[8px] py-[4px] text-xs'
+                    >
+                      Revert
+                    </Button>
+                    <Button
+                      onClick={handleContinueWithoutRevert}
+                      variant='outline'
+                      className='flex-1 px-[8px] py-[4px] text-xs'
                     >
                       Continue
-                    </button>
-                    <button
-                      onClick={async (e) => {
-                        e.preventDefault()
-
-                        // Restore the checkpoint first
-                        if (messageCheckpoints.length > 0) {
-                          const latestCheckpoint = messageCheckpoints[0]
-                          try {
-                            await revertToCheckpoint(latestCheckpoint.id)
-
-                            // Remove the used checkpoint from the store
-                            const { messageCheckpoints: currentCheckpoints } =
-                              useCopilotStore.getState()
-                            const updatedCheckpoints = {
-                              ...currentCheckpoints,
-                              [message.id]: messageCheckpoints.slice(1), // Remove the first (used) checkpoint
-                            }
-                            useCopilotStore.setState({ messageCheckpoints: updatedCheckpoints })
-
-                            logger.info('Reverted to checkpoint before editing message', {
-                              messageId: message.id,
-                              checkpointId: latestCheckpoint.id,
-                            })
-                          } catch (error) {
-                            logger.error('Failed to revert to checkpoint:', error)
-                          }
-                        }
-
-                        // Close the confirmation
-                        setShowCheckpointDiscardModal(false)
-
-                        // Then proceed with the edit
-                        if (pendingEditRef.current) {
-                          const { message, fileAttachments, contexts } = pendingEditRef.current
-                          await performEdit(message, fileAttachments, contexts)
-                          pendingEditRef.current = null
-                        }
-                      }}
-                      className='flex flex-1 items-center justify-center gap-1.5 rounded-md bg-[var(--brand-primary-hover-hex)] px-2 py-1 text-white text-xs transition-colors hover:bg-[var(--brand-primary-hex)]'
-                    >
-                      <span>Continue and revert</span>
-                      <CornerDownLeft className='h-3 w-3' />
-                    </button>
+                    </Button>
                   </div>
                 </div>
               )}
@@ -828,82 +304,6 @@ const CopilotMessage: FC<CopilotMessageProps> = memo(
                 </div>
               )}
 
-              {/* Context chips displayed above the message box */}
-              {(Array.isArray((message as any).contexts) && (message as any).contexts.length > 0) ||
-              (Array.isArray(message.contentBlocks) &&
-                (message.contentBlocks as any[]).some((b: any) => b?.type === 'contexts')) ? (
-                <div className='mb-1.5 flex flex-wrap gap-1.5'>
-                  {(() => {
-                    const direct = Array.isArray((message as any).contexts)
-                      ? ((message as any).contexts as any[])
-                      : []
-                    const block = Array.isArray(message.contentBlocks)
-                      ? (message.contentBlocks as any[]).find((b: any) => b?.type === 'contexts')
-                      : null
-                    const fromBlock = Array.isArray((block as any)?.contexts)
-                      ? ((block as any).contexts as any[])
-                      : []
-                    const allContexts = (direct.length > 0 ? direct : fromBlock).filter(
-                      (c: any) => c?.kind !== 'current_workflow'
-                    )
-                    const MAX_VISIBLE = 4
-                    const visible = showAllContexts
-                      ? allContexts
-                      : allContexts.slice(0, MAX_VISIBLE)
-                    return (
-                      <>
-                        {visible.map((ctx: any, idx: number) => (
-                          <span
-                            key={`ctx-${idx}-${ctx?.label || ctx?.kind}`}
-                            className='inline-flex items-center gap-1 rounded-full bg-[color-mix(in_srgb,var(--brand-primary-hover-hex)_14%,transparent)] px-1.5 py-0.5 text-[11px] text-foreground'
-                            title={ctx?.label || ctx?.kind}
-                          >
-                            {ctx?.kind === 'past_chat' ? (
-                              <Bot className='h-3 w-3 text-muted-foreground' />
-                            ) : ctx?.kind === 'workflow' || ctx?.kind === 'current_workflow' ? (
-                              <Workflow className='h-3 w-3 text-muted-foreground' />
-                            ) : ctx?.kind === 'blocks' ? (
-                              <Blocks className='h-3 w-3 text-muted-foreground' />
-                            ) : ctx?.kind === 'workflow_block' ? (
-                              <Box className='h-3 w-3 text-muted-foreground' />
-                            ) : ctx?.kind === 'knowledge' ? (
-                              <LibraryBig className='h-3 w-3 text-muted-foreground' />
-                            ) : ctx?.kind === 'templates' ? (
-                              <Shapes className='h-3 w-3 text-muted-foreground' />
-                            ) : ctx?.kind === 'docs' ? (
-                              <BookOpen className='h-3 w-3 text-muted-foreground' />
-                            ) : ctx?.kind === 'logs' ? (
-                              <SquareChevronRight className='h-3 w-3 text-muted-foreground' />
-                            ) : (
-                              <Info className='h-3 w-3 text-muted-foreground' />
-                            )}
-                            <span className='max-w-[140px] truncate'>
-                              {ctx?.label || ctx?.kind}
-                            </span>
-                          </span>
-                        ))}
-                        {allContexts.length > MAX_VISIBLE && (
-                          <button
-                            type='button'
-                            onClick={() => setShowAllContexts((v) => !v)}
-                            className='inline-flex items-center gap-1 rounded-full bg-[color-mix(in_srgb,var(--brand-primary-hover-hex)_10%,transparent)] px-1.5 py-0.5 text-[11px] text-foreground hover:bg-[color-mix(in_srgb,var(--brand-primary-hover-hex)_14%,transparent)]'
-                            title={
-                              showAllContexts
-                                ? 'Show less'
-                                : `Show ${allContexts.length - MAX_VISIBLE} more`
-                            }
-                          >
-                            {showAllContexts
-                              ? 'Show less'
-                              : `+${allContexts.length - MAX_VISIBLE} more`}
-                          </button>
-                        )}
-                      </>
-                    )
-                  })()}
-                </div>
-              ) : null}
-
               {/* Message box - styled like input, clickable to edit */}
               <div
                 data-message-box
@@ -911,16 +311,11 @@ const CopilotMessage: FC<CopilotMessageProps> = memo(
                 onClick={handleMessageClick}
                 onMouseEnter={() => setIsHoveringMessage(true)}
                 onMouseLeave={() => setIsHoveringMessage(false)}
-                className='group relative cursor-text rounded-[8px] border border-[#E5E5E5] bg-[#FFFFFF] px-3 py-1.5 shadow-xs transition-all duration-200 hover:border-[#D0D0D0] dark:border-[#414141] dark:bg-[var(--surface-elevated)] dark:hover:border-[#525252]'
+                className='group relative w-full cursor-pointer rounded-[4px] border border-[var(--surface-11)] bg-[var(--surface-6)] px-[6px] py-[6px] transition-all duration-200 hover:border-[var(--surface-14)] hover:bg-[var(--surface-9)] dark:border-[var(--surface-11)] dark:bg-[var(--surface-9)] dark:hover:border-[var(--surface-13)] dark:hover:bg-[var(--surface-11)]'
               >
                 <div
                   ref={messageContentRef}
-                  className={`whitespace-pre-wrap break-words py-1 pl-[2px] font-sans text-foreground text-sm leading-[1.25rem] ${isSendingMessage && isLastUserMessage ? 'pr-10' : 'pr-2'}`}
-                  style={{
-                    maxHeight: !isExpanded && needsExpansion ? '60px' : 'none',
-                    overflow: !isExpanded && needsExpansion ? 'hidden' : 'visible',
-                    position: 'relative',
-                  }}
+                  className={`relative whitespace-pre-wrap break-words px-[2px] py-1 font-medium font-sans text-[#0D0D0D] text-sm leading-[1.25rem] dark:text-gray-100 ${isSendingMessage && isLastUserMessage && isHoveringMessage ? 'pr-7' : ''} ${!isExpanded && needsExpansion ? 'max-h-[60px] overflow-hidden' : 'overflow-visible'}`}
                 >
                   {(() => {
                     const text = message.content || ''
@@ -947,7 +342,7 @@ const CopilotMessage: FC<CopilotMessageProps> = memo(
                       nodes.push(
                         <span
                           key={`mention-${i}-${lastIndex}`}
-                          className='rounded-[6px] bg-[color-mix(in_srgb,var(--brand-primary-hover-hex)_14%,transparent)] px-1'
+                          className='rounded-[6px] bg-[rgba(142,76,251,0.65)]'
                         >
                           {mention}
                         </span>
@@ -958,42 +353,50 @@ const CopilotMessage: FC<CopilotMessageProps> = memo(
                     if (tail) nodes.push(tail)
                     return nodes
                   })()}
-
-                  {/* Gradient fade when truncated */}
-                  {!isExpanded && needsExpansion && (
-                    <div className='absolute right-0 bottom-0 left-0 h-8 bg-gradient-to-t from-[#FFFFFF] to-transparent dark:from-[var(--surface-elevated)]' />
-                  )}
                 </div>
+
+                {/* Gradient fade when truncated - applies to entire message box */}
+                {!isExpanded && needsExpansion && (
+                  <div className='pointer-events-none absolute right-0 bottom-0 left-0 h-6 bg-gradient-to-t from-0% from-[var(--surface-6)] via-40% via-[var(--surface-6)]/70 to-100% to-transparent group-hover:from-[var(--surface-9)] group-hover:via-[var(--surface-9)]/70 dark:from-[var(--surface-9)] dark:via-[var(--surface-9)]/70 dark:group-hover:from-[var(--surface-11)] dark:group-hover:via-[var(--surface-11)]/70' />
+                )}
 
                 {/* Abort button when hovering and response is generating (only on last user message) */}
                 {isSendingMessage && isHoveringMessage && isLastUserMessage && (
-                  <div className='absolute right-2 bottom-2'>
-                    <button
+                  <div className='pointer-events-auto absolute right-[6px] bottom-[6px]'>
+                    <Button
                       onClick={(e) => {
                         e.stopPropagation()
                         abortMessage()
                       }}
-                      className='flex h-6 w-6 items-center justify-center rounded-full bg-red-500 text-white transition-all duration-200 hover:bg-red-600'
+                      className='h-[20px] w-[20px] rounded-full bg-[#C0C0C0] p-0 transition-colors hover:bg-[#D0D0D0] dark:bg-[#C0C0C0] dark:hover:bg-[#D0D0D0]'
                       title='Stop generation'
                     >
-                      <X className='h-3 w-3' />
-                    </button>
+                      <svg
+                        className='block h-[13px] w-[13px]'
+                        viewBox='0 0 24 24'
+                        fill='black'
+                        xmlns='http://www.w3.org/2000/svg'
+                      >
+                        <rect x='4' y='4' width='16' height='16' rx='3' ry='3' />
+                      </svg>
+                    </Button>
                   </div>
                 )}
 
                 {/* Revert button on hover (only when has checkpoints and not generating) */}
-                {!isSendingMessage && hasCheckpoints && (
-                  <div className='pointer-events-auto absolute top-2 right-2 opacity-0 transition-opacity group-hover:opacity-100'>
-                    <button
+                {!isSendingMessage && hasCheckpoints && isHoveringMessage && (
+                  <div className='pointer-events-auto absolute right-[6px] bottom-[6px]'>
+                    <Button
                       onClick={(e) => {
                         e.stopPropagation()
                         handleRevertToCheckpoint()
                       }}
-                      className='flex h-6 w-6 items-center justify-center rounded-full bg-muted text-muted-foreground transition-all duration-200 hover:bg-muted-foreground/20'
+                      variant='ghost'
+                      className='h-[22px] w-[22px] rounded-full p-0'
                       title='Revert to checkpoint'
                     >
-                      <RotateCcw className='h-3 w-3' />
-                    </button>
+                      <RotateCcw className='h-3.5 w-3.5' />
+                    </Button>
                   </div>
                 )}
               </div>
@@ -1002,29 +405,30 @@ const CopilotMessage: FC<CopilotMessageProps> = memo(
 
           {/* Inline Restore Checkpoint Confirmation */}
           {showRestoreConfirmation && (
-            <div className='mt-2 rounded-lg border border-gray-200 bg-gray-50 p-2.5 dark:border-gray-700 dark:bg-gray-900'>
-              <p className='mb-2 text-foreground text-sm'>
+            <div className='mt-[8px] rounded-[4px] border border-[var(--surface-11)] bg-[var(--surface-6)] p-[10px] dark:border-[var(--surface-11)] dark:bg-[var(--surface-9)]'>
+              <p className='mb-[8px] text-[var(--text-primary)] text-sm'>
                 Revert to checkpoint? This will restore your workflow to the state saved at this
                 checkpoint.{' '}
-                <span className='font-medium text-red-600 dark:text-red-400'>
+                <span className='font-medium text-[var(--text-error)]'>
                   This action cannot be undone.
                 </span>
               </p>
-              <div className='flex gap-1.5'>
-                <button
+              <div className='flex gap-[6px]'>
+                <Button
                   onClick={handleCancelRevert}
-                  className='flex flex-1 items-center justify-center gap-1.5 rounded-md border border-gray-300 bg-muted px-2 py-1 text-foreground text-xs transition-colors hover:bg-muted/80 dark:border-gray-600'
+                  variant='default'
+                  className='flex flex-1 items-center justify-center gap-[6px] px-[8px] py-[4px] text-xs'
                 >
                   <span>Cancel</span>
-                  <span className='text-[10px] text-muted-foreground'>(Esc)</span>
-                </button>
-                <button
+                  <span className='text-[10px] text-[var(--text-muted)]'>(Esc)</span>
+                </Button>
+                <Button
                   onClick={handleConfirmRevert}
-                  className='flex flex-1 items-center justify-center gap-1.5 rounded-md bg-red-500 px-2 py-1 text-white text-xs transition-colors hover:bg-red-600'
+                  variant='outline'
+                  className='flex-1 px-[8px] py-[4px] text-xs'
                 >
-                  <span>Revert</span>
-                  <CornerDownLeft className='h-3 w-3' />
-                </button>
+                  Revert
+                </Button>
               </div>
             </div>
           )}
@@ -1035,9 +439,10 @@ const CopilotMessage: FC<CopilotMessageProps> = memo(
     if (isAssistant) {
       return (
         <div
-          className={`w-full max-w-full overflow-hidden py-0.5 pl-[2px] transition-opacity duration-200 ${isDimmed ? 'opacity-40' : 'opacity-100'}`}
+          className={`w-full max-w-full overflow-hidden transition-opacity duration-200 [max-width:var(--panel-max-width)] ${isDimmed ? 'opacity-40' : 'opacity-100'}`}
+          style={{ '--panel-max-width': `${panelWidth - 16}px` } as React.CSSProperties}
         >
-          <div className='max-w-full space-y-1.5 transition-all duration-200 ease-in-out'>
+          <div className='max-w-full space-y-1.5 px-[2px] transition-all duration-200 ease-in-out'>
             {/* Content blocks in chronological order */}
             {memoizedContentBlocks}
 
@@ -1055,40 +460,43 @@ const CopilotMessage: FC<CopilotMessageProps> = memo(
 
             {/* Action buttons for completed messages */}
             {!isStreaming && cleanTextContent && (
-              <div className='flex items-center gap-2'>
-                <button
+              <div className='flex items-center gap-[8px] pt-[8px]'>
+                <Button
                   onClick={handleCopyContent}
-                  className='text-muted-foreground transition-colors hover:bg-muted'
+                  variant='ghost'
                   title='Copy'
+                  className='!h-[14px] !w-[14px] !p-0'
                 >
                   {showCopySuccess ? (
-                    <Check className='h-3 w-3' strokeWidth={2} />
+                    <Check className='h-[14px] w-[14px]' strokeWidth={2} />
                   ) : (
-                    <Clipboard className='h-3 w-3' strokeWidth={2} />
+                    <Copy className='h-[14px] w-[14px]' strokeWidth={2} />
                   )}
-                </button>
-                <button
+                </Button>
+                <Button
                   onClick={handleUpvote}
-                  className='text-muted-foreground transition-colors hover:bg-muted'
+                  variant='ghost'
                   title='Upvote'
+                  className='!h-[14px] !w-[14px] !p-0'
                 >
                   {showUpvoteSuccess ? (
-                    <Check className='h-3 w-3' strokeWidth={2} />
+                    <Check className='h-[14px] w-[14px]' strokeWidth={2} />
                   ) : (
-                    <ThumbsUp className='h-3 w-3' strokeWidth={2} />
+                    <ThumbsUp className='h-[14px] w-[14px]' strokeWidth={2} />
                   )}
-                </button>
-                <button
+                </Button>
+                <Button
                   onClick={handleDownvote}
-                  className='text-muted-foreground transition-colors hover:bg-muted'
+                  variant='ghost'
                   title='Downvote'
+                  className='!h-[14px] !w-[14px] !p-0'
                 >
                   {showDownvoteSuccess ? (
-                    <Check className='h-3 w-3' strokeWidth={2} />
+                    <Check className='h-[14px] w-[14px]' strokeWidth={2} />
                   ) : (
-                    <ThumbsDown className='h-3 w-3' strokeWidth={2} />
+                    <ThumbsDown className='h-[14px] w-[14px]' strokeWidth={2} />
                   )}
-                </button>
+                </Button>
               </div>
             )}
 

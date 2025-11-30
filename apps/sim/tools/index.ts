@@ -193,6 +193,9 @@ export async function executeTool(
 
         const data = await response.json()
         contextParams.accessToken = data.accessToken
+        if (data.idToken) {
+          contextParams.idToken = data.idToken
+        }
 
         logger.info(
           `[${requestId}] Successfully got access token for ${toolId}, length: ${data.accessToken?.length || 0}`
@@ -450,20 +453,25 @@ async function handleInternalRequest(
 ): Promise<ToolResponse> {
   const requestId = generateRequestId()
 
-  // Format the request parameters
   const requestParams = formatRequestParams(tool, params)
 
   try {
     const baseUrl = getBaseUrl()
-    // Handle the case where url may be a function or string
     const endpointUrl =
       typeof tool.request.url === 'function' ? tool.request.url(params) : tool.request.url
 
     const fullUrlObj = new URL(endpointUrl, baseUrl)
     const isInternalRoute = endpointUrl.startsWith('/api/')
+
+    if (isInternalRoute) {
+      const workflowId = params._context?.workflowId
+      if (workflowId) {
+        fullUrlObj.searchParams.set('workflowId', workflowId)
+      }
+    }
+
     const fullUrl = fullUrlObj.toString()
 
-    // For custom tools, validate parameters on the client side before sending
     if (toolId.startsWith('custom_') && tool.request.body) {
       const requestBody = tool.request.body(params)
       if (requestBody.schema && requestBody.params) {
@@ -491,29 +499,36 @@ async function handleInternalRequest(
 
     const response = await fetch(fullUrl, requestOptions)
 
-    // For non-OK responses, attempt JSON first; if parsing fails, preserve legacy error expected by tests
+    // For non-OK responses, attempt JSON first; if parsing fails, fall back to text
     if (!response.ok) {
       let errorData: any
       try {
         errorData = await response.json()
       } catch (jsonError) {
-        logger.error(`[${requestId}] JSON parse error for ${toolId}:`, {
-          error: jsonError instanceof Error ? jsonError.message : String(jsonError),
-        })
-        throw new Error(`Failed to parse response from ${toolId}: ${jsonError}`)
+        // JSON parsing failed, fall back to reading as text for error extraction
+        logger.warn(`[${requestId}] Response is not JSON for ${toolId}, reading as text`)
+        try {
+          errorData = await response.text()
+        } catch (textError) {
+          logger.error(`[${requestId}] Failed to read response body for ${toolId}`)
+          errorData = null
+        }
       }
 
-      const { isError, errorInfo } = isErrorResponse(response, errorData)
-      if (isError) {
-        const errorToTransform = createTransformedErrorFromErrorInfo(errorInfo, tool.errorExtractor)
-
-        logger.error(`[${requestId}] Internal API error for ${toolId}:`, {
-          status: errorInfo?.status,
-          errorData: errorInfo?.data,
-        })
-
-        throw errorToTransform
+      const errorInfo: ErrorInfo = {
+        status: response.status,
+        statusText: response.statusText,
+        data: errorData,
       }
+
+      const errorToTransform = createTransformedErrorFromErrorInfo(errorInfo, tool.errorExtractor)
+
+      logger.error(`[${requestId}] Internal API error for ${toolId}:`, {
+        status: errorInfo.status,
+        errorData: errorInfo.data,
+      })
+
+      throw errorToTransform
     }
 
     // Parse response data once with guard for empty 202 bodies
